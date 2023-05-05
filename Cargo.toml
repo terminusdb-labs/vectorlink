@@ -16,3 +16,4 @@ regex = "1.7.3"
 lazy_static = "1.4"
 bytes = "1.4"
 clap = {version = "4.2", features=["derive"]}
+hnsw = "0.11"
