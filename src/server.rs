@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use hyper::{
     service::{make_service_fn, service_fn},
     Body, Method, Request, Response, Server, Uri,
@@ -13,7 +14,7 @@ use std::{
 };
 //use serde_json;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(tag = "op")]
 enum Operation {
     Inserted { string: String, id: String },
@@ -21,7 +22,7 @@ enum Operation {
     Deleted { id: String },
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct IndexRequest {
     commit_id: String,
     operations: Vec<Operation>,
@@ -51,6 +52,10 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
 #[derive(Clone)]
 struct Service {}
 
+async fn extract_body(req: Request<Body>) -> Bytes {
+    hyper::body::to_bytes(req.into_body()).await.unwrap()
+}
+
 impl Service {
     fn new<P: Into<PathBuf>>(_: P) -> Self {
         Service {}
@@ -58,19 +63,23 @@ impl Service {
 
     async fn serve(&self, req: Request<Body>) -> Result<Response<Body>, Infallible> {
         match req.method() {
-            &Method::POST => self.get(req).await,
+            &Method::POST => self.post(req).await,
             _ => todo!(),
         }
     }
 
-    async fn get(&self, req: Request<Body>) -> Result<Response<Body>, Infallible> {
+    async fn post(&self, req: Request<Body>) -> Result<Response<Body>, Infallible> {
         let uri = req.uri();
         match uri_to_spec(uri) {
             Ok(ResourceSpec::IndexRequest) => {
-                let body = req.body();
-                Ok(Response::builder()
-                    .body(format!("Hello {}!", "world").into())
-                    .unwrap())
+                let body = extract_body(req).await;
+                let operations: Result<IndexRequest, _> = serde_json::from_slice(&body);
+                match operations {
+                    Ok(indexrequest) => Ok(Response::builder()
+                        .body(format!("Hello {:?}!", indexrequest).into())
+                        .unwrap()),
+                    Err(_error) => todo!(),
+                }
             }
             Err(_) => todo!(),
         }
