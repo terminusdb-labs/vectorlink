@@ -1,13 +1,14 @@
 use clap::{Parser, Subcommand};
 
-mod server;
+mod indexer;
 mod openai;
+mod server;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     #[command(subcommand)]
-    command: Commands
+    command: Commands,
 }
 
 #[derive(Subcommand, Debug)]
@@ -22,15 +23,15 @@ enum Commands {
         #[arg(short, long)]
         key: String,
         #[arg(short, long)]
-        string: String
-    }
+        string: String,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Args::parse();
     match args.command {
-        Commands::Serve{ directory, port } => server::serve(directory, port).await?,
+        Commands::Serve { directory, port } => server::serve(directory, port).await?,
         Commands::Embed { key, string } => {
             let v = openai::embeddings_for(&key, &[&string]).await?;
             eprintln!("{:?}", v);
