@@ -73,7 +73,7 @@ struct PointQuery {
     distance: u32,
 }
 
-fn search<'a, 'b>(
+fn search(
     p: &Point,
     num: usize,
     hnsw: Hnsw<OpenAI, Point, Lcg128Xsl64, 12, 24>,
