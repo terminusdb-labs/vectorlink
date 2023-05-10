@@ -1,10 +1,13 @@
-use std::{iter, sync::Arc};
+use std::{io, iter, sync::Arc};
 
+use futures::Stream;
 use hnsw::{Hnsw, Searcher};
 use rand_pcg::{Lcg128Xsl64, Pcg64};
+
+use crate::{openai::Embedding, server::Operation};
 use space::{Metric, Neighbor};
 
-use crate::openai::Embedding;
+use tokio_stream::StreamExt;
 
 #[derive(Clone, Debug, PartialEq)]
 struct Point {
@@ -25,20 +28,25 @@ impl Metric<Point> for OpenAI {
 }
 
 #[derive(Clone, Debug)]
-enum Operation {
+enum PointOperation {
     Insert { point: Point },
     //    Replace { point: Point },
     //    Delete { point: Point },
 }
 
-struct Domain {
-    previous: String,
+pub struct IndexIdentifier {
+    previous: Option<String>,
     commit: String,
     domain: String,
 }
 
-fn load_hnsw(domain: Domain) -> Hnsw<OpenAI, Point, Pcg64, 12, 24> {
-    Hnsw::new(OpenAI)
+fn load_hnsw(idxid: IndexIdentifier) -> Hnsw<OpenAI, Point, Pcg64, 12, 24> {
+    if let Some(previous) = idxid.previous {
+        // load previous index
+        Hnsw::new(OpenAI)
+    } else {
+        Hnsw::new(OpenAI)
+    }
 }
 
 #[derive(Debug)]
@@ -47,19 +55,39 @@ enum IndexError {
 }
 
 fn index_points(
-    operations: Vec<Operation>,
-    domain: Domain,
+    operations: Vec<PointOperation>,
+    domain: IndexIdentifier,
 ) -> Result<Hnsw<OpenAI, Point, Lcg128Xsl64, 12, 24>, IndexError> {
     let mut hnsw = load_hnsw(domain);
     let mut searcher = Searcher::default();
     for operation in &operations {
+        match operation {
+            PointOperation::Insert { point } => {
+                hnsw.insert(point.clone(), &mut searcher);
+            }
+        }
+    }
+    Ok(hnsw)
+}
+
+pub async fn start_indexing_from_operations(
+    operations: impl Stream<Item = io::Result<Operation>> + Unpin,
+    idxid: IndexIdentifier,
+) -> Result<(), io::Error> {
+    todo!();
+    /*
+    let mut hnsw = load_hnsw(idxid);
+    let mut searcher = Searcher::default();
+    while let Some(operation) = operations.try_next().await? {
         match operation {
             Operation::Insert { point } => {
                 hnsw.insert(point.clone(), &mut searcher);
             }
         }
     }
-    Ok(hnsw)
+    // Put this index somewhere!
+    todo!();
+    */
 }
 
 #[derive(Debug)]
@@ -110,25 +138,25 @@ mod tests {
         vector_block[2][0] = -1.0;
         vector_block[3][1] = -1.0;
         let operations: Vec<_> = [
-            Operation::Insert {
+            PointOperation::Insert {
                 point: Point {
                     id: "Point/1".to_string(),
                     vec: Arc::new(vector_block[0]),
                 },
             },
-            Operation::Insert {
+            PointOperation::Insert {
                 point: Point {
                     id: "Point/2".to_string(),
                     vec: Arc::new(vector_block[1]),
                 },
             },
-            Operation::Insert {
+            PointOperation::Insert {
                 point: Point {
                     id: "Point/3".to_string(),
                     vec: Arc::new(vector_block[2]),
                 },
             },
-            Operation::Insert {
+            PointOperation::Insert {
                 point: Point {
                     id: "Point/4".to_string(),
                     vec: Arc::new(vector_block[3]),
@@ -139,8 +167,8 @@ mod tests {
         .collect();
         let hnsw = index_points(
             operations,
-            Domain {
-                previous: "previous".to_string(),
+            IndexIdentifier {
+                previous: None,
                 commit: "commit".to_string(),
                 domain: "here".to_string(),
             },

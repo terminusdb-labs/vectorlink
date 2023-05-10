@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use futures::TryStreamExt;
 use hyper::{
     service::{make_service_fn, service_fn},
     Body, Method, Request, Response, Server, Uri,
@@ -16,10 +17,19 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
+use std::{
+    future,
+    io::{self, ErrorKind},
+};
+use tokio::io::AsyncBufReadExt;
+use tokio_stream::{wrappers::LinesStream, Stream};
+use tokio_util::io::StreamReader;
+
+use crate::indexer::{start_indexing_from_operations, IndexIdentifier};
 
 #[derive(Deserialize, Debug)]
 #[serde(tag = "op")]
-enum Operation {
+pub enum Operation {
     Inserted { string: String, id: String },
     Changed { string: String, id: String },
     Deleted { id: String },
@@ -27,7 +37,9 @@ enum Operation {
 
 #[derive(Deserialize, Debug)]
 struct IndexRequest {
-    commit_id: String,
+    domain: String,
+    commit: String,
+    previous: Option<String>,
     operations: Vec<Operation>,
 }
 
@@ -119,11 +131,43 @@ async fn extract_body(req: Request<Body>) -> Bytes {
     hyper::body::to_bytes(req.into_body()).await.unwrap()
 }
 
+enum TerminusIndexOperationError {}
+
+const TERMINUSDB_INDEX_ENDPOINT: &str = "http://localhost:6363/api/index";
+async fn get_operations_from_terminusdb(
+    domain: String,
+    commit: String,
+    previous: Option<String>,
+) -> Result<impl Stream<Item = io::Result<Operation>> + Unpin, io::Error> {
+    let mut params: Vec<_> = [("domain", domain), ("commit", commit)]
+        .into_iter()
+        .collect();
+    if let Some(previous) = previous {
+        params.push(("previous", previous))
+    }
+    let url = reqwest::Url::parse_with_params(TERMINUSDB_INDEX_ENDPOINT, &params).unwrap();
+    let res = reqwest::get(url)
+        .await
+        .unwrap()
+        .bytes_stream()
+        .map_err(|e| std::io::Error::new(ErrorKind::Other, e));
+    let lines = StreamReader::new(res).lines();
+    let lines_stream = LinesStream::new(lines);
+    let fp = lines_stream.and_then(|l| {
+        future::ready(
+            serde_json::from_str(&l)
+                .map_err(|e| std::io::Error::new(ErrorKind::Other, e))
+                .into(),
+        )
+    });
+    Ok(fp)
+}
+
 impl Service {
     fn generate_task() -> String {
         let s: String = rand::thread_rng()
             .sample_iter(&Alphanumeric)
-            .take(7)
+            .take(8)
             .map(char::from)
             .collect();
         s
@@ -143,9 +187,19 @@ impl Service {
         }
     }
 
-    fn start_indexing(&self, domain: String, commit: String, previous: Option<String>) {
-        todo!();
-        //return Ok(());
+    async fn start_indexing(&self, domain: String, commit: String, previous: Option<String>) {
+        let opstream =
+            get_operations_from_terminusdb(domain.clone(), commit.clone(), previous.clone())
+                .await
+                .unwrap();
+        start_indexing_from_operations(
+            opstream,
+            IndexIdentifier {
+                domain,
+                commit,
+                previous,
+            },
+        );
     }
 
     async fn get(&self, req: Request<Body>) -> Result<Response<Body>, Infallible> {
@@ -179,16 +233,6 @@ impl Service {
     async fn post(&self, req: Request<Body>) -> Result<Response<Body>, Infallible> {
         let uri = req.uri();
         match uri_to_spec(uri) {
-            Ok(ResourceSpec::IndexRequest) => {
-                let body = extract_body(req).await;
-                let operations: Result<IndexRequest, _> = serde_json::from_slice(&body);
-                match operations {
-                    Ok(indexrequest) => Ok(Response::builder()
-                        .body(format!("Hello {:?}!", indexrequest).into())
-                        .unwrap()),
-                    Err(_error) => todo!(),
-                }
-            }
             Ok(_) => todo!(),
             Err(_) => todo!(),
         }
