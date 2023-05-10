@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use futures::TryStreamExt;
+use hnsw::Hnsw;
 use hyper::{
     service::{make_service_fn, service_fn},
     Body, Method, Request, Response, Server, Uri,
@@ -25,7 +26,7 @@ use tokio::io::AsyncBufReadExt;
 use tokio_stream::{wrappers::LinesStream, Stream};
 use tokio_util::io::StreamReader;
 
-use crate::indexer::{start_indexing_from_operations, IndexIdentifier};
+use crate::indexer::{start_indexing_from_operations, HnswIndex, IndexIdentifier, OpenAI};
 
 #[derive(Deserialize, Debug)]
 #[serde(tag = "op")]
@@ -116,15 +117,16 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
 }
 
 #[derive(Clone, Debug)]
-enum TaskStatus {
+pub enum TaskStatus {
     Pending,
     Error,
     Completed,
 }
 
 #[derive(Clone)]
-struct Service {
-    tasks: HashMap<String, TaskStatus>,
+pub struct Service {
+    pub tasks: HashMap<String, TaskStatus>,
+    pub indexes: HashMap<String, HnswIndex>,
 }
 
 async fn extract_body(req: Request<Body>) -> Bytes {
@@ -155,9 +157,7 @@ async fn get_operations_from_terminusdb(
     let lines_stream = LinesStream::new(lines);
     let fp = lines_stream.and_then(|l| {
         future::ready(
-            serde_json::from_str(&l)
-                .map_err(|e| std::io::Error::new(ErrorKind::Other, e))
-                .into(),
+            serde_json::from_str(&l).map_err(|e| std::io::Error::new(ErrorKind::Other, e)),
         )
     });
     Ok(fp)
@@ -176,10 +176,11 @@ impl Service {
     fn new<P: Into<PathBuf>>(_: P) -> Self {
         Service {
             tasks: HashMap::new(),
+            indexes: HashMap::new(),
         }
     }
 
-    async fn serve(&self, req: Request<Body>) -> Result<Response<Body>, Infallible> {
+    async fn serve(&mut self, req: Request<Body>) -> Result<Response<Body>, Infallible> {
         match req.method() {
             &Method::POST => self.post(req).await,
             &Method::GET => self.get(req).await,
@@ -187,22 +188,31 @@ impl Service {
         }
     }
 
-    async fn start_indexing(&self, domain: String, commit: String, previous: Option<String>) {
+    async fn load_hnsw(&mut self, idxid: IndexIdentifier) -> HnswIndex {
+        if let Some(previous) = idxid.previous {
+            // load previous index
+            Hnsw::new(OpenAI)
+        } else {
+            Hnsw::new(OpenAI)
+        }
+    }
+
+    async fn start_indexing(&mut self, domain: String, commit: String, previous: Option<String>) {
         let opstream =
             get_operations_from_terminusdb(domain.clone(), commit.clone(), previous.clone())
                 .await
                 .unwrap();
-        start_indexing_from_operations(
-            opstream,
-            IndexIdentifier {
+        let hnsw = self
+            .load_hnsw(IndexIdentifier {
                 domain,
                 commit,
                 previous,
-            },
-        );
+            })
+            .await;
+        start_indexing_from_operations(hnsw, opstream);
     }
 
-    async fn get(&self, req: Request<Body>) -> Result<Response<Body>, Infallible> {
+    async fn get(&mut self, req: Request<Body>) -> Result<Response<Body>, Infallible> {
         let uri = req.uri();
         match uri_to_spec(uri) {
             Ok(ResourceSpec::StartIndex {
@@ -244,12 +254,12 @@ pub async fn serve<P: Into<PathBuf>>(
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
-    let service = Arc::new(Service::new(directory));
+    let service = Service::new(directory);
     let make_svc = make_service_fn(move |_conn| {
         let s = service.clone();
         async {
             Ok::<_, Infallible>(service_fn(move |req| {
-                let s = s.clone();
+                let mut s = s.clone();
                 async move { s.serve(req).await }
             }))
         }

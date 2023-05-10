@@ -1,20 +1,26 @@
-use std::{io, iter, sync::Arc};
+use std::{collections::HashMap, io, iter, sync::Arc};
 
 use futures::Stream;
 use hnsw::{Hnsw, Searcher};
 use rand_pcg::{Lcg128Xsl64, Pcg64};
 
-use crate::{openai::Embedding, server::Operation};
+use crate::{
+    openai::Embedding,
+    server::{Operation, Service},
+};
 use space::{Metric, Neighbor};
 
 use tokio_stream::StreamExt;
 
+pub type HnswIndex = Hnsw<OpenAI, Point, Lcg128Xsl64, 12, 24>;
+
 #[derive(Clone, Debug, PartialEq)]
-struct Point {
+pub struct Point {
     id: String,
     vec: Arc<Embedding>,
 }
 
+#[derive(Clone)]
 pub struct OpenAI;
 
 impl Metric<Point> for OpenAI {
@@ -35,18 +41,9 @@ enum PointOperation {
 }
 
 pub struct IndexIdentifier {
-    previous: Option<String>,
-    commit: String,
-    domain: String,
-}
-
-fn load_hnsw(idxid: IndexIdentifier) -> Hnsw<OpenAI, Point, Pcg64, 12, 24> {
-    if let Some(previous) = idxid.previous {
-        // load previous index
-        Hnsw::new(OpenAI)
-    } else {
-        Hnsw::new(OpenAI)
-    }
+    pub previous: Option<String>,
+    pub commit: String,
+    pub domain: String,
 }
 
 #[derive(Debug)]
@@ -58,6 +55,8 @@ fn index_points(
     operations: Vec<PointOperation>,
     domain: IndexIdentifier,
 ) -> Result<Hnsw<OpenAI, Point, Lcg128Xsl64, 12, 24>, IndexError> {
+    todo!()
+    /*
     let mut hnsw = load_hnsw(domain);
     let mut searcher = Searcher::default();
     for operation in &operations {
@@ -67,16 +66,16 @@ fn index_points(
             }
         }
     }
-    Ok(hnsw)
+        Ok(hnsw)
+     */
 }
 
 pub async fn start_indexing_from_operations(
+    hnsw: Hnsw<OpenAI, Point, Lcg128Xsl64, 12, 24>,
     operations: impl Stream<Item = io::Result<Operation>> + Unpin,
-    idxid: IndexIdentifier,
 ) -> Result<(), io::Error> {
     todo!();
     /*
-    let mut hnsw = load_hnsw(idxid);
     let mut searcher = Searcher::default();
     while let Some(operation) = operations.try_next().await? {
         match operation {
