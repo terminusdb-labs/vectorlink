@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 mod indexer;
 mod openai;
 mod server;
+mod vectors;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
