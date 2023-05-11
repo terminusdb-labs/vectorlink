@@ -145,7 +145,7 @@ impl Service {
 
     fn start_indexing(&self, domain: String, commit: String, previous: Option<String>) {
         todo!();
-        return Ok(());
+        //return Ok(());
     }
 
     async fn get(&self, req: Request<Body>) -> Result<Response<Body>, Infallible> {
