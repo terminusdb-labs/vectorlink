@@ -259,18 +259,22 @@ impl PageArena {
         true
     }
 
-    fn cached_to_loaded(self: Arc<Self>, spec: PageSpec) -> Arc<PageHandle> {
+    fn cached_to_loaded(self: Arc<Self>, spec: PageSpec) -> Option<Arc<PageHandle>> {
         // We're acquiring two locks. In order to make sure there won't be deadlocks, we have to ensure that these locks are always acquired in this order.
         // Luckily, there's only two functions that need to acquire both of these locks, and we can easily verify that both do indeed acquire in this order, thus preventing deadlocks.
         let mut loaded = self.loaded.write().unwrap();
         let mut cache = self.cache.write().unwrap();
 
-        let page = cache.pop(&spec).expect("page not in cache");
+        let page = cache.pop(&spec);
+        if page.is_none() {
+            return None;
+        }
+        let page = page.unwrap();
         let handle = Arc::new(PageHandle { spec, arena: self.clone(), p: &*page.page });
         assert!(loaded.insert(spec, PinnedVectorPage { page, handle: Arc::downgrade(&handle) }).is_none(),
                 "page from cache was already in load map");
 
-        handle
+        Some(handle)
     }
 
     fn page_from_loaded(self: Arc<Self>, spec: PageSpec) -> Option<Arc<PageHandle>> {
@@ -325,7 +329,7 @@ impl Drop for PageHandle {
 }
 
 impl PageHandle {
-    fn get_vec(&self, index: usize) -> &Embedding {
+    pub fn get_vec(&self, index: usize) -> &Embedding {
         if index >= VECTORS_PER_PAGE {
             panic!("index bigger than max vectors per page ({}): {}", VECTORS_PER_PAGE, index);
         }
@@ -336,6 +340,43 @@ impl PageHandle {
         // moved out of the loaded pages unless this arc's refcount is
         // 0.
         unsafe {&*(self.p as *const Embedding).offset(index as isize)}
+    }
+
+    pub fn get_loaded_vec(self: Arc<Self>, index: usize) -> LoadedVec {
+        if index >= VECTORS_PER_PAGE {
+            panic!("index bigger than max vectors per page ({}): {}", VECTORS_PER_PAGE, index);
+        }
+
+        let vec = unsafe {(self.p as *const Embedding).offset(index as isize) };
+        LoadedVec {
+            page: self.clone(),
+            vec
+        }
+    }
+
+    pub unsafe fn get_page_mut(&self) -> &mut [Embedding;VECTORS_PER_PAGE] {
+        let page = self.p as *mut [Embedding;VECTORS_PER_PAGE];
+        &mut *page
+    }
+}
+
+pub struct LoadedVec {
+    page: Arc<PageHandle>,
+    vec: *const Embedding
+}
+
+impl Deref for LoadedVec {
+    type Target = Embedding;
+
+    fn deref(&self) -> &Self::Target {
+        // This pointer should be valid, because the only way for the
+        // underlying page to move out of the load map is if the
+        // pagehandle arc has no more strong references. Since we
+        // ourselves hold one such reference, this won't happen for
+        // the lifetime of LoadedVecl.
+
+
+        unsafe {&*self.vec}
     }
 }
 
