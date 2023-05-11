@@ -408,11 +408,6 @@ impl PageHandle {
             vec
         }
     }
-
-    pub unsafe fn get_page_mut(&self) -> &mut [Embedding;VECTORS_PER_PAGE] {
-        let page = self.p as *mut [Embedding;VECTORS_PER_PAGE];
-        &mut *page
-    }
 }
 
 pub struct LoadedVec {
@@ -504,7 +499,7 @@ impl VectorStore {
                 let offset_in_page = offset - (page_index * VECTORS_PER_PAGE);
                 let remainder_in_page = VECTORS_PER_PAGE - offset_in_page;
                 let vecs_to_load = if num_added >= remainder_in_page { remainder_in_page } else { num_added };
-                let data: &mut VectorPageBytes = unsafe { std::mem::transmute(existing_page.get_page_mut()) };
+                let data: &mut VectorPageBytes = unsafe { std::mem::transmute(&mut *(existing_page.p as *mut [Embedding;VECTORS_PER_PAGE])) };
                 let offset_byte = offset_in_page * std::mem::size_of::<Embedding>();
                 let end_byte = offset_byte + vecs_to_load * std::mem::size_of::<Embedding>();
                 let mutation_range = &mut data[offset_byte..end_byte];
