@@ -419,13 +419,14 @@ pub struct LoadedVec {
     vec: *const Embedding
 }
 
-/*
+unsafe impl Send for LoadedVec {}
+unsafe impl Sync for LoadedVec {}
+
 impl fmt::Debug for LoadedVec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "LoadedVec({:?})", self.vec)
     }
 }
-*/
 
 impl Deref for LoadedVec {
     type Target = Embedding;
