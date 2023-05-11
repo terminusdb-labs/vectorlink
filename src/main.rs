@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match args.command {
         Commands::Serve { directory, port } => server::serve(directory, port).await?,
         Commands::Embed { key, string } => {
-            let v = openai::embeddings_for(&key, &[&string]).await?;
+            let v = openai::embeddings_for(&key, &[string]).await?;
             eprintln!("{:?}", v);
         }
     }

@@ -1,14 +1,17 @@
-use reqwest::{Request, Method, Url, header::HeaderValue, Body, Client, StatusCode, Response};
 use lazy_static::lazy_static;
-use serde::{Serialize, Deserialize, de::{Visitor, SeqAccess}, Deserializer};
+use reqwest::{header::HeaderValue, Body, Client, Method, Request, Response, StatusCode, Url};
+use serde::{
+    de::{SeqAccess, Visitor},
+    Deserialize, Deserializer, Serialize,
+};
 use thiserror::Error;
 
 #[derive(Serialize)]
 struct EmbeddingRequest<'a> {
     model: &'a str,
-    input: &'a [&'a String],
+    input: &'a [String],
     #[serde(skip_serializing_if = "Option::is_none")]
-    user: Option<&'a str>
+    user: Option<&'a str>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -16,24 +19,27 @@ struct EmbeddingResponse {
     object: String,
     data: Vec<EmbeddingData>,
     model: String,
-    usage: EmbeddingUsage
+    usage: EmbeddingUsage,
 }
 
-pub const EMBEDDING_LENGTH:  usize = 1536;
-pub const EMBEDDING_BYTE_LENGTH:  usize = EMBEDDING_LENGTH*4;
-pub type Embedding = [f32;EMBEDDING_LENGTH];
-pub type EmbeddingBytes = [u8;EMBEDDING_BYTE_LENGTH];
+pub const EMBEDDING_LENGTH: usize = 1536;
+pub const EMBEDDING_BYTE_LENGTH: usize = EMBEDDING_LENGTH * 4;
+pub type Embedding = [f32; EMBEDDING_LENGTH];
+pub type EmbeddingBytes = [u8; EMBEDDING_BYTE_LENGTH];
 
 #[derive(Deserialize, Debug)]
 struct EmbeddingData {
     object: String,
     index: usize,
     #[serde(deserialize_with = "deserialize_single_embedding")]
-    embedding: Embedding
+    embedding: Embedding,
 }
 
-fn deserialize_single_embedding<'de, D>(deserializer: D) -> Result<Embedding, D::Error> where D: Deserializer<'de> {
-        deserializer.deserialize_seq(SingleEmbeddingVisitor)
+fn deserialize_single_embedding<'de, D>(deserializer: D) -> Result<Embedding, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserializer.deserialize_seq(SingleEmbeddingVisitor)
 }
 
 struct SingleEmbeddingVisitor;
@@ -46,8 +52,10 @@ impl<'de> Visitor<'de> for SingleEmbeddingVisitor {
     }
 
     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-    where A: SeqAccess<'de> {
-        let mut result = [0.0;1536];
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut result = [0.0; 1536];
         let mut index = 0;
         while let Some(next) = seq.next_element()? {
             if index >= result.len() {
@@ -65,7 +73,7 @@ impl<'de> Visitor<'de> for SingleEmbeddingVisitor {
 #[derive(Deserialize, Debug)]
 struct EmbeddingUsage {
     prompt_tokens: usize,
-    total_tokens: usize
+    total_tokens: usize,
 }
 
 #[derive(Error, Debug)]
@@ -76,11 +84,13 @@ pub enum EmbeddingError {
     BadStatus(StatusCode, String),
 
     #[error("error while parsing json: {0:?}")]
-    BadJson(#[from] serde_json::Error)
-
+    BadJson(#[from] serde_json::Error),
 }
 
-pub async fn embeddings_for(api_key: &str, strings: &[&String]) -> Result<Vec<Embedding>, EmbeddingError> {
+pub async fn embeddings_for(
+    api_key: &str,
+    strings: &[String],
+) -> Result<Vec<Embedding>, EmbeddingError> {
     lazy_static! {
         static ref ENDPOINT: Url = Url::parse("https://api.openai.com/v1/embeddings").unwrap();
         static ref CLIENT: Client = Client::new();
@@ -89,11 +99,16 @@ pub async fn embeddings_for(api_key: &str, strings: &[&String]) -> Result<Vec<Em
     let mut req = Request::new(Method::POST, ENDPOINT.clone());
     let headers = req.headers_mut();
     headers.insert("Content-Type", HeaderValue::from_static("application/json"));
-    headers.insert("Authorization", HeaderValue::from_str(&format!("Bearer {api_key}")).unwrap());
+    headers.insert(
+        "Authorization",
+        HeaderValue::from_str(&format!("Bearer {api_key}")).unwrap(),
+    );
 
-    let body = EmbeddingRequest { model: "text-embedding-ada-002",
-                                  input: strings,
-                                  user: None};
+    let body = EmbeddingRequest {
+        model: "text-embedding-ada-002",
+        input: strings,
+        user: None,
+    };
     let body_vec = serde_json::to_vec(&body).unwrap();
     let body: Body = body_vec.into();
 

@@ -1,16 +1,13 @@
-use std::{collections::HashMap, io, iter, sync::Arc};
+use std::{io, iter, sync::Arc};
 
-use futures::Stream;
 use hnsw::{Hnsw, Searcher};
-use rand_pcg::{Lcg128Xsl64, Pcg64};
+use rand_pcg::Lcg128Xsl64;
 
 use crate::{
-    openai::Embedding,
-    server::{Operation, Service},
+    openai::{embeddings_for, Embedding},
+    server::Operation,
 };
 use space::{Metric, Neighbor};
-
-use tokio_stream::StreamExt;
 
 pub type HnswIndex = Hnsw<OpenAI, Point, Lcg128Xsl64, 12, 24>;
 
@@ -34,10 +31,47 @@ impl Metric<Point> for OpenAI {
 }
 
 #[derive(Clone, Debug)]
-enum PointOperation {
+pub enum PointOperation {
     Insert { point: Point },
-    //    Replace { point: Point },
-    //    Delete { point: Point },
+    Replace { point: Point },
+    Delete { id: String },
+}
+
+const API_KEY: &str = "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";
+
+pub async fn operations_to_point_operations(
+    structs: Vec<Result<Operation, std::io::Error>>,
+) -> Vec<PointOperation> {
+    let ops: Vec<Operation> = structs.into_iter().map(|ro| ro.unwrap()).collect();
+    let strings: Vec<String> = ops
+        .iter()
+        .map(|o| match o {
+            Operation::Inserted { string, id: _ } => string.into(),
+            Operation::Changed { string, id: _ } => string.into(),
+            Operation::Deleted { id: _ } => "".to_string(),
+        })
+        .collect();
+    let vecs: Vec<Embedding> = embeddings_for(API_KEY, &strings).await.unwrap();
+    let new_ops: Vec<PointOperation> = ops
+        .into_iter()
+        .enumerate()
+        .map(|(i, o)| match o {
+            Operation::Inserted { string: _, id } => PointOperation::Insert {
+                point: Point {
+                    vec: Arc::new(vecs[i]),
+                    id,
+                },
+            },
+            Operation::Changed { string: _, id } => PointOperation::Replace {
+                point: Point {
+                    vec: Arc::new(vecs[i]),
+                    id,
+                },
+            },
+            Operation::Deleted { id } => PointOperation::Delete { id },
+        })
+        .collect();
+    new_ops
 }
 
 pub struct IndexIdentifier {
@@ -51,42 +85,23 @@ enum IndexError {
     Failed,
 }
 
-fn index_points(
+pub fn start_indexing_from_operations(
+    mut hnsw: HnswIndex,
     operations: Vec<PointOperation>,
-    domain: IndexIdentifier,
-) -> Result<Hnsw<OpenAI, Point, Lcg128Xsl64, 12, 24>, IndexError> {
-    todo!()
-    /*
-    let mut hnsw = load_hnsw(domain);
+) -> Result<HnswIndex, io::Error> {
     let mut searcher = Searcher::default();
-    for operation in &operations {
+    for operation in operations {
         match operation {
             PointOperation::Insert { point } => {
                 hnsw.insert(point.clone(), &mut searcher);
             }
-        }
-    }
-        Ok(hnsw)
-     */
-}
-
-pub async fn start_indexing_from_operations(
-    hnsw: Hnsw<OpenAI, Point, Lcg128Xsl64, 12, 24>,
-    operations: impl Stream<Item = io::Result<Operation>> + Unpin,
-) -> Result<(), io::Error> {
-    todo!();
-    /*
-    let mut searcher = Searcher::default();
-    while let Some(operation) = operations.try_next().await? {
-        match operation {
-            Operation::Insert { point } => {
-                hnsw.insert(point.clone(), &mut searcher);
-            }
+            PointOperation::Replace { point: _ } => todo!(),
+            PointOperation::Delete { id: _ } => todo!(),
         }
     }
     // Put this index somewhere!
-    todo!();
-    */
+    //todo!()
+    Ok(hnsw)
 }
 
 #[derive(Debug)]
@@ -164,15 +179,7 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let hnsw = index_points(
-            operations,
-            IndexIdentifier {
-                previous: None,
-                commit: "commit".to_string(),
-                domain: "here".to_string(),
-            },
-        )
-        .unwrap();
+        let hnsw = start_indexing_from_operations(Hnsw::new(OpenAI), operations).unwrap();
         let mut candidate_vec: Embedding = [0.0; 1536];
         candidate_vec[0] = 0.707;
         candidate_vec[1] = 0.707;
