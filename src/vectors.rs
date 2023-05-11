@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{self, SeekFrom, Seek, Write};
+use std::mem::MaybeUninit;
 use std::os::unix::prelude::FileExt;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -563,6 +564,45 @@ impl VectorStore {
             }
         }
     }
+    pub fn add_and_load_vecs<'a, I:Iterator<Item=&'a Embedding>>(&self, domain: &Domain, vecs: I) -> io::Result<Vec<LoadedVec>> {
+        let ids = self.add_vecs(domain, vecs)?;
+
+        let mut result = Vec::with_capacity(ids.len());
+        for id in ids.into_iter() {
+            let e = self.get_vec(domain, id)?.unwrap();
+            result.push(e);
+        }
+
+        Ok(result)
+    }
+
+    pub fn add_and_load_vec(&self, domain: &Domain, vec: &Embedding) -> io::Result<LoadedVec> {
+        let ids = self.add_vecs(domain, [vec].into_iter())?;
+
+        Ok(self.get_vec(domain, ids[0])?.unwrap())
+    }
+
+    pub fn add_and_load_vec_array<const N: usize>(&self, domain: &Domain, embeddings: &[Embedding;N]) -> io::Result<[LoadedVec;N]> {
+        let ids = self.add_vecs(domain, embeddings.iter())?;
+
+        let mut result: [MaybeUninit<LoadedVec>; N] = unsafe { MaybeUninit::uninit().assume_init() };
+        for (r,id) in result.iter_mut().zip(ids.into_iter()) {
+            let e: LoadedVec = self.get_vec(domain, id)?.unwrap();
+            r.write(e);
+        }
+
+        // It would be nicer if we could do a transmute here, as
+        // transmute ensures that the conversion converts between
+        // types of the same size, but it seems like this doesn't work
+        // yet with const generic arrays. We do a pointer cast
+        // instead.
+        let magic = result.as_ptr() as *const [LoadedVec;N];
+        std::mem::forget(result);
+        let result = unsafe { magic.read() };
+
+        Ok(result)
+    }
+
     pub fn statistics(&self) -> VectorStoreStatistics {
         self.arena.statistics()
     }
@@ -724,5 +764,70 @@ mod tests {
             cached: 0
         }, store.statistics());
         assert_eq!(e3, *e3_from_mem);
+    }
+
+    #[test]
+    fn add_and_load_single() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path();
+        let store = VectorStore::new(path, 100);
+        let seed: u64 = 42;
+        let mut rng = StdRng::seed_from_u64(seed);
+        let domain = store.get_domain("foo").unwrap();
+
+        let e1 = random_embedding(&mut rng);
+        let e1_from_mem = store.add_and_load_vec(&domain, &e1).unwrap();
+
+        assert_eq!(e1, *e1_from_mem);
+    }
+
+    #[test]
+    fn add_and_load_vec() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path();
+        let store = VectorStore::new(path, 100);
+        let seed: u64 = 42;
+        let mut rng = StdRng::seed_from_u64(seed);
+        let domain = store.get_domain("foo").unwrap();
+
+        let e1 = random_embedding(&mut rng);
+        let e2 = random_embedding(&mut rng);
+        let e3 = random_embedding(&mut rng);
+        let e4 = random_embedding(&mut rng);
+        let e5 = random_embedding(&mut rng);
+        let result = store.add_and_load_vecs(&domain, [e1,e2,e3,e4,e5].iter()).unwrap();
+
+        assert_eq!(e1, *result[0]);
+        assert_eq!(e2, *result[1]);
+        assert_eq!(e3, *result[2]);
+        assert_eq!(e4, *result[3]);
+        assert_eq!(e5, *result[4]);
+    }
+
+    #[test]
+    fn add_and_load_array() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path();
+        let store = VectorStore::new(path, 100);
+        let seed: u64 = 42;
+        let mut rng = StdRng::seed_from_u64(seed);
+        let domain = store.get_domain("foo").unwrap();
+
+        let e1 = random_embedding(&mut rng);
+        let e2 = random_embedding(&mut rng);
+        let e3 = random_embedding(&mut rng);
+        let e4 = random_embedding(&mut rng);
+        let e5 = random_embedding(&mut rng);
+        let [e1_from_memory,
+             e2_from_memory,
+             e3_from_memory,
+             e4_from_memory,
+             e5_from_memory] = store.add_and_load_vec_array(&domain, &[e1,e2,e3,e4,e5]).unwrap();
+
+        assert_eq!(e1, *e1_from_memory);
+        assert_eq!(e2, *e2_from_memory);
+        assert_eq!(e3, *e3_from_memory);
+        assert_eq!(e4, *e4_from_memory);
+        assert_eq!(e5, *e5_from_memory);
     }
 }
