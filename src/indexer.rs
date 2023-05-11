@@ -66,18 +66,17 @@ pub async fn operations_to_point_operations(
     let strings: Vec<String> = tuples.iter().map(|(_, s, _)| s.to_string()).collect();
     let vecs: Vec<Embedding> = embeddings_for(API_KEY, &strings).await.unwrap();
     let domain = vector_store.get_domain(domain).unwrap();
-    let ids = vector_store.add_vecs(&domain, vecs.iter()).unwrap();
-    let mut new_ops: Vec<PointOperation> = zip(tuples, ids)
-        .map(|((op, s, id), idx)| {
-            let vec = vector_store.get_vec(&domain, idx).unwrap().unwrap();
-            match op {
-                Op::Insert => PointOperation::Insert {
-                    point: Point { vec, id },
-                },
-                Op::Changed => PointOperation::Replace {
-                    point: Point { vec, id },
-                },
-            }
+    let loaded_vecs = vector_store
+        .add_and_load_vecs(&domain, vecs.iter())
+        .unwrap();
+    let mut new_ops: Vec<PointOperation> = zip(tuples, loaded_vecs)
+        .map(|((op, _, id), vec)| match op {
+            Op::Insert => PointOperation::Insert {
+                point: Point { vec, id },
+            },
+            Op::Changed => PointOperation::Replace {
+                point: Point { vec, id },
+            },
         })
         .collect();
     let mut delete_ops: Vec<_> = ops
