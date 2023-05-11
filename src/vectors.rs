@@ -325,12 +325,17 @@ impl Drop for PageHandle {
 }
 
 impl PageHandle {
-    fn get_vec(&mut self, index: usize) -> &Embedding {
+    fn get_vec(&self, index: usize) -> &Embedding {
         if index >= VECTORS_PER_PAGE {
             panic!("index bigger than max vectors per page ({}): {}", VECTORS_PER_PAGE, index);
         }
 
-        unsafe {&*(self.p as *const Embedding).offset(index)}}
+        // This pointer should be valid, because the only way for
+        // people to acquire pagehandles is through an interface that
+        // returns the pagehandle as an arc, and the page doesn't get
+        // moved out of the loaded pages unless this arc's refcount is
+        // 0.
+        unsafe {&*(self.p as *const Embedding).offset(index as isize)}
     }
 }
 
