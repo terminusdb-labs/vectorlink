@@ -32,6 +32,7 @@ use tokio_util::io::StreamReader;
 use crate::indexer::operations_to_point_operations;
 use crate::indexer::PointOperation;
 use crate::indexer::{start_indexing_from_operations, HnswIndex, IndexIdentifier, OpenAI};
+use crate::vectors::VectorStore;
 
 #[derive(Deserialize, Debug)]
 #[serde(tag = "op")]
@@ -133,6 +134,7 @@ pub enum TaskStatus {
 }
 
 pub struct Service {
+    vector_store: VectorStore,
     pending: Mutex<HashSet<String>>,
     tasks: RwLock<HashMap<String, TaskStatus>>,
     indexes: RwLock<HashMap<String, Arc<HnswIndex>>>,
@@ -216,8 +218,9 @@ impl Service {
         s
     }
 
-    fn new<P: Into<PathBuf>>(_: P) -> Self {
+    fn new<P: Into<PathBuf>>(path: P, num_bufs: usize) -> Self {
         Service {
+            vector_store: VectorStore::new(path, num_bufs),
             pending: Mutex::new(HashSet::new()),
             tasks: RwLock::new(HashMap::new()),
             indexes: RwLock::new(HashMap::new()),
@@ -324,9 +327,10 @@ impl Service {
 pub async fn serve<P: Into<PathBuf>>(
     directory: P,
     port: u16,
+    num_bufs: usize,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
-    let service = Arc::new(Service::new(directory));
+    let service = Arc::new(Service::new(directory, num_bufs));
     let make_svc = make_service_fn(move |_conn| {
         let s = service.clone();
         async {

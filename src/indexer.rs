@@ -6,6 +6,7 @@ use rand_pcg::Lcg128Xsl64;
 use crate::{
     openai::{embeddings_for, Embedding},
     server::Operation,
+    vectors::{LoadedVec, VectorStore},
 };
 use space::{Metric, Neighbor};
 
@@ -14,7 +15,7 @@ pub type HnswIndex = Hnsw<OpenAI, Point, Lcg128Xsl64, 12, 24>;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Point {
     id: String,
-    vec: Arc<Embedding>,
+    vec: LoadedVec,
 }
 
 #[derive(Clone)]
@@ -39,20 +40,30 @@ pub enum PointOperation {
 
 const API_KEY: &str = "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";
 
+enum Op {
+    Insert,
+    Changed,
+}
+
 pub async fn operations_to_point_operations(
+    domain: &str,
+    vector_store: &VectorStore,
     structs: Vec<Result<Operation, std::io::Error>>,
 ) -> Vec<PointOperation> {
     let ops: Vec<Operation> = structs.into_iter().map(|ro| ro.unwrap()).collect();
-    let strings: Vec<String> = ops
+    let tuples: Vec<(Op,String,String)> = ops
         .iter()
-        .map(|o| match o {
-            Operation::Inserted { string, id: _ } => string.into(),
-            Operation::Changed { string, id: _ } => string.into(),
-            Operation::Deleted { id: _ } => "".to_string(),
-        })
-        .collect();
+        .flat_map(|o| match o {
+            Operation::Inserted { string, id } => Some((Op::Insert, string.into(), id.into())),
+            Operation::Changed { string, id } => Some((Op::Changed, string.into(), id.into())),
+            Operation::Deleted { id: _ } => None,
+        });
+    let strings : Vec<String> = tuples.iter().map(|(_,s,_)| s.to_string()).collect();
     let vecs: Vec<Embedding> = embeddings_for(API_KEY, &strings).await.unwrap();
-    let new_ops: Vec<PointOperation> = ops
+    let domain = vector_store.get_domain(domain).unwrap();
+    let ids = vector_store.add_vecs(&domain, vecs.iter()).unwrap();
+    let new_ops:; Vec<PointOperation> = zip(tuples,vecs)
+        .map(
         .into_iter()
         .enumerate()
         .map(|(i, o)| match o {
@@ -84,6 +95,10 @@ pub struct IndexIdentifier {
 enum IndexError {
     Failed,
 }
+
+/*
+pub fn serialize_index(domain: Domain, hnsw: HnswIndex) -> io::Result<()> {}
+ */
 
 pub fn start_indexing_from_operations(
     mut hnsw: HnswIndex,
@@ -140,10 +155,16 @@ fn search(
 
 #[cfg(test)]
 mod tests {
+    use crate::vectors::VectorStore;
+
     use super::*;
 
     #[test]
     fn low_dimensional_search() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path();
+        let store = VectorStore::new(path, 2);
+
         let mut vector_block: Vec<Embedding> = [[0.0; 1536], [0.0; 1536], [0.0; 1536], [0.0; 1536]]
             .into_iter()
             .collect();
@@ -151,29 +172,37 @@ mod tests {
         vector_block[1][1] = 1.0;
         vector_block[2][0] = -1.0;
         vector_block[3][1] = -1.0;
+
+        let domain = store.get_domain("foo").unwrap();
+        let ids = store.add_vecs(&domain, vector_block.iter()).unwrap();
+        let e1 = store.get_vec(&domain, 0).unwrap().unwrap();
+        let e2 = store.get_vec(&domain, 1).unwrap().unwrap();
+        let e3 = store.get_vec(&domain, 2).unwrap().unwrap();
+        let e4 = store.get_vec(&domain, 3).unwrap().unwrap();
+
         let operations: Vec<_> = [
             PointOperation::Insert {
                 point: Point {
                     id: "Point/1".to_string(),
-                    vec: Arc::new(vector_block[0]),
+                    vec: e1,
                 },
             },
             PointOperation::Insert {
                 point: Point {
                     id: "Point/2".to_string(),
-                    vec: Arc::new(vector_block[1]),
+                    vec: e2,
                 },
             },
             PointOperation::Insert {
                 point: Point {
                     id: "Point/3".to_string(),
-                    vec: Arc::new(vector_block[2]),
+                    vec: e3,
                 },
             },
             PointOperation::Insert {
                 point: Point {
                     id: "Point/4".to_string(),
-                    vec: Arc::new(vector_block[3]),
+                    vec: e4,
                 },
             },
         ]
@@ -183,16 +212,18 @@ mod tests {
         let mut candidate_vec: Embedding = [0.0; 1536];
         candidate_vec[0] = 0.707;
         candidate_vec[1] = 0.707;
+        let id = store.add_vecs(&domain, [candidate_vec].iter()).unwrap();
+        assert_eq!(id[0], 4);
+        let q1 = store.get_vec(&domain, 4).unwrap().unwrap();
+
         let p = Point {
             id: "unknown".to_string(),
-            vec: Arc::new(candidate_vec),
+            vec: q1,
         };
         let points = search(&p, 4, hnsw).unwrap();
         let p1 = &points[0];
         let p2 = &points[1];
-        assert_eq!(p1.point.vec[0], 1.0);
-        assert_eq!(p1.point.vec[1], 0.0);
-        assert_eq!(p2.point.vec[0], 0.0);
-        assert_eq!(p2.point.vec[1], 1.0);
+        assert_eq!(p1.point.vec, e1);
+        assert_eq!(p2.point.vec, e2);
     }
 }
