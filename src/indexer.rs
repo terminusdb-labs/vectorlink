@@ -1,20 +1,21 @@
-use std::{
-    io,
-    iter::{self, zip},
-    sync::Arc,
-};
-
-use hnsw::{Hnsw, Searcher};
-use rand_pcg::Lcg128Xsl64;
-
 use crate::{
     openai::{embeddings_for, Embedding},
     server::Operation,
     vectors::{LoadedVec, VectorStore},
 };
+use hnsw::{Hnsw, Searcher};
+use rand_pcg::Lcg128Xsl64;
+use serde::{Deserialize, Serialize};
 use space::{Metric, Neighbor};
+use std::{fs::File, sync::Arc};
+use std::{
+    io,
+    iter::{self, zip},
+    path::PathBuf,
+};
 
 pub type HnswIndex = Hnsw<OpenAI, Point, Lcg128Xsl64, 12, 24>;
+pub type HnswStorageIndex = Hnsw<OpenAI, IndexPoint, Lcg128Xsl64, 12, 24>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Point {
@@ -22,7 +23,27 @@ pub enum Point {
     Mem { vec: Box<Embedding> },
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct IndexPoint {
+    id: String,
+    index: usize,
+}
+
 impl Point {
+    fn id(&self) -> &String {
+        match self {
+            Point::Stored { id, vec } => id,
+            Point::Mem { vec } => panic!("You can not get the external id of a memory point"),
+        }
+    }
+
+    fn vec_id(&self) -> usize {
+        match self {
+            Point::Stored { id, vec } => vec.id(),
+            Point::Mem { vec } => panic!("You can not get the vector id of a memory point"),
+        }
+    }
+
     fn vec(&self) -> &Embedding {
         match self {
             Point::Stored { id: _, vec } => vec,
@@ -31,7 +52,7 @@ impl Point {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OpenAI;
 
 impl Metric<Point> for OpenAI {
@@ -41,6 +62,13 @@ impl Metric<Point> for OpenAI {
         let b = p2.vec();
         let f = a.iter().zip(b.iter()).map(|(&a, &b)| (a - b)).sum::<f32>();
         (1.0 - f).to_bits()
+    }
+}
+
+impl Metric<IndexPoint> for OpenAI {
+    type Unit = u32;
+    fn distance(&self, p1: &IndexPoint, p2: &IndexPoint) -> u32 {
+        unimplemented!()
     }
 }
 
@@ -167,6 +195,34 @@ fn search(
     Ok(points)
 }
 
+pub fn serialize_index(path: &mut PathBuf, name: &str, hnsw: HnswIndex) -> io::Result<()> {
+    path.push(format!("{name}.hnsw"));
+    let write_file = File::options().write(true).create(true).open(&path)?;
+
+    let hnsw = hnsw.transform_features(|t| IndexPoint {
+        id: t.id().to_string(),
+        index: t.vec_id(),
+    });
+    serde_json::to_writer(write_file, &hnsw)?;
+    Ok(())
+}
+
+pub fn deserialize_index(
+    path: &mut PathBuf,
+    name: &str,
+    vector_store: &VectorStore,
+) -> io::Result<HnswIndex> {
+    path.push(format!("{name}.hnsw"));
+    let read_file = File::options().read(true).open(&path)?;
+    let hnsw: HnswStorageIndex = serde_json::from_reader(read_file).unwrap();
+    let domain = vector_store.get_domain(name)?;
+    let hnsw = hnsw.transform_features(|t| Point::Stored {
+        id: t.id,
+        vec: vector_store.get_vec(&domain, t.index).unwrap().unwrap(),
+    });
+    Ok(hnsw)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::vectors::VectorStore;
@@ -189,10 +245,10 @@ mod tests {
 
         let domain = store.get_domain("foo").unwrap();
         let ids = store.add_vecs(&domain, vector_block.iter()).unwrap();
-        let e1 = store.get_vec(&domain, 0).unwrap().unwrap();
-        let e2 = store.get_vec(&domain, 1).unwrap().unwrap();
-        let e3 = store.get_vec(&domain, 2).unwrap().unwrap();
-        let e4 = store.get_vec(&domain, 3).unwrap().unwrap();
+        let e1 = store.get_vec(&domain, ids[0]).unwrap().unwrap();
+        let e2 = store.get_vec(&domain, ids[1]).unwrap().unwrap();
+        let e3 = store.get_vec(&domain, ids[2]).unwrap().unwrap();
+        let e4 = store.get_vec(&domain, ids[3]).unwrap().unwrap();
 
         let operations: Vec<_> = [
             PointOperation::Insert {
