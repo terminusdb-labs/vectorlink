@@ -419,6 +419,15 @@ pub struct LoadedVec {
     vec: *const Embedding
 }
 
+impl LoadedVec {
+    pub fn id(&self) -> usize {
+        let page_offset = self.page.spec.index * VECTORS_PER_PAGE;
+        let offset_in_page = (self.vec as usize - self.page.p as usize) / std::mem::size_of::<Embedding>();
+
+        page_offset + offset_in_page
+    }
+}
+
 unsafe impl Send for LoadedVec {}
 unsafe impl Sync for LoadedVec {}
 
@@ -593,6 +602,9 @@ mod tests {
         assert_eq!(e1, *e1_from_mem);
         assert_eq!(e2, *e2_from_mem);
         assert_eq!(e3, *e3_from_mem);
+        assert_eq!(0, e1_from_mem.id());
+        assert_eq!(1, e2_from_mem.id());
+        assert_eq!(2, e3_from_mem.id());
 
         let store2 = VectorStore::new(path, 100);
         let e1_from_disk = store2.get_vec(&domain, 0).unwrap().unwrap();
