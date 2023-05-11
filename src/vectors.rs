@@ -49,9 +49,12 @@ impl Deref for LoadedVector {
     }
 }
 
-// 3 memory pages of 4K each hold a round number of embedding vectors
-const VECTOR_PAGE_FLOAT_SIZE: usize = 3*4096*1024/(EMBEDDING_LENGTH*4);
-const VECTOR_PAGE_BYTE_SIZE: usize = VECTOR_PAGE_FLOAT_SIZE * 4;
+// 3 memory pages of 4K hold 2 OpenAI vectors.
+// We set things up so that blocks are some multiple of 2 pages.
+const VECTOR_PAGE_MULTIPLIER: usize = 1;
+const VECTOR_PAGE_BYTE_SIZE: usize = VECTOR_PAGE_MULTIPLIER*3*4096;
+const VECTOR_PAGE_FLOAT_SIZE: usize = VECTOR_PAGE_BYTE_SIZE/4;
+const VECTORS_PER_PAGE: usize = VECTOR_PAGE_FLOAT_SIZE / EMBEDDING_LENGTH;
 
 type VectorPage = [f32;VECTOR_PAGE_FLOAT_SIZE];
 type VectorPageBytes = [u8;VECTOR_PAGE_BYTE_SIZE];
@@ -242,15 +245,16 @@ impl PageArena {
         let mut loaded = self.loaded.write().unwrap();
         let mut cache = self.cache.write().unwrap();
 
-        assert!(loaded.get(&spec).expect("page that was supposedly loaded was not found in the load map")
-                .handle.strong_count() == 0,
-                "removed page from load map that still was referred to");
+        if loaded.get(&spec).expect("page that was supposedly loaded was not found in the load map")
+            .handle.strong_count() != 0 {
+                // Whoops! Looks like someone re-acquired this page while we weren't looking!
+                // Best to leave it alone.
+                return false;
+            }
         assert!(!cache.contains(&spec),
                 "page already in cache");
         let page = loaded.remove(&spec).unwrap();
         cache.get_or_insert(spec, move || page.page);
-        // TODO ensure that this only happens if the loaded page wasn't referred to anymore.
-        // Note that there's a race, where we might start to move to cache but find out that we actually shouldn't cause someone just acquired a new lock. So make sure this can fail.
 
         true
     }
@@ -268,6 +272,41 @@ impl PageArena {
 
         handle
     }
+
+    fn page_from_loaded(self: Arc<Self>, spec: PageSpec) -> Option<Arc<PageHandle>> {
+        // so tricky bit here is that we wish to load a page whose refcount could just have gone down to 0, but for which the drop on the handle hasn't run yet.
+        // we will have to solve this race condition.
+        // basically, while holding the lock we have to replace the pagehandle (as the original one cannot be safely upgraded anymore). We also have to inhibit the move to cache that was triggered.
+        // this is just a small race condition window but it is there. so best make sure.
+        let loaded = self.loaded.read().unwrap();
+        if let Some(page) = loaded.get(&spec) {
+            if let Some(handle) = page.handle.upgrade() {
+                Some(handle)
+            } else {
+                // Uh oh, this handle was dropped but somehow we still encountered this page in the loaded map.
+                // That means someone is right around the corner to move this page into the cache. We gotta stop them.
+                std::mem::drop(loaded);
+                let mut loaded = self.loaded.write().unwrap();
+                if let Some(page) = loaded.get_mut(&spec) {
+                    // ok it is still here. To be absolutely sure, we have to recheck the lock
+                    if let Some(handle) = page.handle.upgrade() {
+                        // someone got here before us and reacquired the page.
+                        Some(handle)
+                    } else {
+                        // we got here first! create new handle.
+                        let handle = Arc::new(PageHandle { spec, arena: self.clone(), p: &*page.page.page });
+                        page.handle = Arc::downgrade(&handle);
+                        Some(handle)
+                    }
+                } else {
+                    // In the brief window between dropping the read lock and acquiring the write lock, this page got moved into cache.
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    }
 }
 
 struct PageHandle {
@@ -282,6 +321,16 @@ unsafe impl Sync for PageHandle {}
 impl Drop for PageHandle {
     fn drop(&mut self) {
         self.arena.loaded_to_cached(self.spec);
+    }
+}
+
+impl PageHandle {
+    fn get_vec(&mut self, index: usize) -> &Embedding {
+        if index >= VECTORS_PER_PAGE {
+            panic!("index bigger than max vectors per page ({}): {}", VECTORS_PER_PAGE, index);
+        }
+
+        unsafe {&*(self.p as *const Embedding).offset(index)}}
     }
 }
 
