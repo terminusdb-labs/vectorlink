@@ -32,7 +32,7 @@ struct PinnedVectorPage {
     handle: Weak<PageHandle>
 }
 
-struct Domain {
+pub struct Domain {
     name: Arc<String>,
     index: usize,
     read_file: File,
@@ -72,7 +72,7 @@ impl Domain {
         })
     }
 
-    fn add_vecs<'a, I:Iterator<Item=&'a Embedding>>(&self, vecs: I) -> io::Result<()> {
+    fn add_vecs<'a, I:Iterator<Item=&'a Embedding>>(&self, vecs: I) -> io::Result<(usize, usize)> {
         let mut write_file = self.write_file.lock().unwrap();
         let mut count = 0;
         for embedding in vecs {
@@ -82,11 +82,11 @@ impl Domain {
         }
         write_file.flush()?;
         write_file.sync_data()?;
-        let mut num_vecs = self.num_vecs.load(atomic::Ordering::Relaxed);
-        num_vecs += count;
-        self.num_vecs.store(num_vecs, atomic::Ordering::Relaxed);
+        let num_vecs = self.num_vecs.load(atomic::Ordering::Relaxed);
+        let new_num_vecs = num_vecs + count;
+        self.num_vecs.store(new_num_vecs, atomic::Ordering::Relaxed);
 
-        Ok(())
+        Ok((num_vecs, count))
     }
 
     fn load_page(&self, index: usize, data: &mut VectorPage) -> io::Result<bool> {
@@ -130,13 +130,21 @@ struct PageArena {
     cache: RwLock<LruCache<PageSpec, LoadedVectorPage>>,
 }
 
-#[derive(Default, PartialEq, Eq, Clone, Copy)]
+#[derive(Default, Clone)]
 enum LoadState {
     #[default]
     Loading,
-    Loaded,
-    Cached,
+    Loaded(Arc<PageHandle>),
     Canceled
+}
+
+impl LoadState {
+    fn is_loading(&self) -> bool {
+        match self {
+            Self::Loading => true,
+            _ => false
+        }
+    }
 }
 
 impl PageArena {
@@ -178,28 +186,26 @@ impl PageArena {
         cache.contains(&spec)
     }
 
-    fn start_loading_or_wait(&self, spec: PageSpec) -> LoadState {
+    fn start_loading_or_wait(self: &Arc<Self>, spec: PageSpec) -> LoadState {
         let mut loading = self.loading.lock().unwrap();
         if let Some(x) = loading.get(&spec).map(|x|x.clone()) {
             // someone is already loading. Let's wait.
             std::mem::drop(loading);
             let (cv, m) = &*x;
             let mut load_state = m.lock().unwrap();
-            while *load_state == LoadState::Loading {
+            while load_state.is_loading() {
                 load_state = cv.wait(load_state).unwrap();
             }
             // this will now either be loaded or canceled
-            *load_state
+            load_state.clone()
         } else {
             // doesn't seem like we're actually loading this thing yet.
             // let's make absolutely sure that we have to do this.
             // We're currently holding the loading lock, so we know for sure nobody will race us to start this load.
             // Since checking if a page is loaded or cached also locks, we have to make very sure that in other bits of code we aren't acquiring the loading lock after either the loaded or cache lock, as this could incur a lock cycle.
             // Luckily, there's only 3 functions where the loading lock is acquired, and this one is the only one where other locks are acquired as well. So we can be sure that this won't deadlock, despite the hold-and-wait.
-            if self.page_is_loaded(spec) {
-                LoadState::Loaded
-            } else if self.page_is_cached(spec) {
-                LoadState::Cached
+            if let Some(handle) = self.page_from_any(spec) {
+                LoadState::Loaded(handle)
             } else {
                 loading.insert(spec, Default::default());
                 LoadState::Loading
@@ -207,7 +213,7 @@ impl PageArena {
         }
     }
 
-    fn finish_loading(self: Arc<Self>, spec: PageSpec, page: Pin<Box<VectorPage>>) -> Arc<PageHandle> {
+    fn finish_loading(self: &Arc<Self>, spec: PageSpec, page: Pin<Box<VectorPage>>) -> Arc<PageHandle> {
         let index = spec.index;
         let handle = Arc::new(PageHandle { spec, arena: self.clone(), p: &*page});
         let mut loaded = self.loaded.write().unwrap();
@@ -224,7 +230,7 @@ impl PageArena {
         let (cv, m) = &*x;
 
         let mut load_state = m.lock().unwrap();
-        *load_state = LoadState::Loaded;
+        *load_state = LoadState::Loaded(handle.clone());
         cv.notify_all();
 
         handle
@@ -264,7 +270,7 @@ impl PageArena {
         true
     }
 
-    fn cached_to_loaded(self: Arc<Self>, spec: PageSpec) -> Option<Arc<PageHandle>> {
+    fn cached_to_loaded(self: &Arc<Self>, spec: PageSpec) -> Option<Arc<PageHandle>> {
         // We're acquiring two locks. In order to make sure there won't be deadlocks, we have to ensure that these locks are always acquired in this order.
         // Luckily, there's only two functions that need to acquire both of these locks, and we can easily verify that both do indeed acquire in this order, thus preventing deadlocks.
         let mut loaded = self.loaded.write().unwrap();
@@ -282,7 +288,7 @@ impl PageArena {
         Some(handle)
     }
 
-    fn page_from_loaded(self: Arc<Self>, spec: PageSpec) -> Option<Arc<PageHandle>> {
+    fn page_from_loaded(self: &Arc<Self>, spec: PageSpec) -> Option<Arc<PageHandle>> {
         // so tricky bit here is that we wish to load a page whose refcount could just have gone down to 0, but for which the drop on the handle hasn't run yet.
         // we will have to solve this race condition.
         // basically, while holding the lock we have to replace the pagehandle (as the original one cannot be safely upgraded anymore). We also have to inhibit the move to cache that was triggered.
@@ -316,6 +322,11 @@ impl PageArena {
             None
         }
     }
+
+    pub fn page_from_any(self: &Arc<Self>, spec: PageSpec) -> Option<Arc<PageHandle>> {
+        self.cached_to_loaded(spec)
+            .or_else(|| self.page_from_loaded(spec))
+    }
 }
 
 struct PageHandle {
@@ -347,7 +358,7 @@ impl PageHandle {
         unsafe {&*(self.p as *const Embedding).offset(index as isize)}
     }
 
-    pub fn get_loaded_vec(self: Arc<Self>, index: usize) -> LoadedVec {
+    pub fn get_loaded_vec(self: &Arc<Self>, index: usize) -> LoadedVec {
         if index >= VECTORS_PER_PAGE {
             panic!("index bigger than max vectors per page ({}): {}", VECTORS_PER_PAGE, index);
         }
@@ -385,30 +396,97 @@ impl Deref for LoadedVec {
     }
 }
 
-struct VectorStore {
+pub struct VectorStore {
     dir: PathBuf,
     arena: Arc<PageArena>,
-    domains: HashMap<String, Domain>
+    domains: RwLock<HashMap<String, Arc<Domain>>>
 }
 
 impl VectorStore {
-    pub fn add_vecs(&mut self, domain: &str, vecs: &[Embedding]) -> io::Result<()> {
-        let domain = self.get_or_add_domain(domain)?;
-        domain.add_vecs(vecs.iter())?;
-        // TODO this could mean that a page is now invalid. Gotta make sure it gets updated :o
-        // We know this has no effect on any loaded vectors, cause we do not overwrite things.
-        // So any existing pointers out there can just remain valid. We just need to get at the right page and update it.
+    pub fn get_domain(&self, name: &str) -> io::Result<Arc<Domain>> {
+        let domains = self.domains.read().unwrap();
+        if let Some(domain) = domains.get(name) {
+            Ok(domain.clone())
+        } else {
+            std::mem::drop(domains);
+            let mut domains = self.domains.write().unwrap();
+            if let Some(domain) = domains.get(name) {
+                Ok(domain.clone())
+            } else {
+                let domain = Arc::new(Domain::open(&self.dir, name, domains.len())?);
+                domains.insert(name.to_string(), domain.clone());
+
+                Ok(domain)
+            }
+        }
+    }
+
+    pub fn add_vecs<'a, I:Iterator<Item=&'a Embedding>>(&self, domain: &Domain, vecs: I) -> io::Result<()> {
+        let (offset, num_added) = domain.add_vecs(vecs)?;
+        if offset % VECTORS_PER_PAGE != 0 {
+            // vecs got added to a page that might actually already be in memory. We'll have to refresh it.
+            let page_index = offset / VECTORS_PER_PAGE;
+            let page_spec = PageSpec {
+                domain: domain.index,
+                index: page_index
+            };
+
+            if let Some(existing_page) = self.arena.page_from_any(page_spec) {
+                // yup, that page existed. We'll partially read the file to get the vecs.
+                let offset_in_page = offset - (page_index * VECTORS_PER_PAGE);
+                let remainder_in_page = VECTORS_PER_PAGE - offset_in_page;
+                let vecs_to_load = if num_added >= remainder_in_page { remainder_in_page } else { num_added };
+                let data: &mut VectorPageBytes = unsafe { std::mem::transmute(existing_page.get_page_mut()) };
+                let offset_byte = offset_in_page * std::mem::size_of::<Embedding>();
+                let end_byte = offset_byte + vecs_to_load * std::mem::size_of::<Embedding>();
+                let mutation_range = &mut data[offset_byte..end_byte];
+                domain.load_partial_page(page_index, offset_byte, mutation_range)?;
+            }
+        }
         Ok(())
     }
-}
 
-impl VectorStore {
-    fn get_or_add_domain(&mut self, name: &str) -> io::Result<&mut Domain> {
-        if !self.domains.contains_key(name) {
-            let domain = Domain::open(&self.dir, name, self.domains.len())?;
-            self.domains.insert(name.to_string(), domain);
+    pub fn get_vec(&self, domain: &Domain, index: usize) -> io::Result<Option<LoadedVec>> {
+        if domain.num_vecs() >= index {
+            return Ok(None);
         }
 
-        Ok(self.domains.get_mut(name).unwrap())
+        let page_index = index / VECTORS_PER_PAGE;
+        let index_in_page = index % VECTORS_PER_PAGE;
+        let page_spec = PageSpec {
+            domain: domain.index,
+            index: page_index
+        };
+        if let Some(page) = self.arena.page_from_any(page_spec) {
+            Ok(Some(page.get_loaded_vec(index_in_page)))
+        } else {
+            // the page is on disk but not yet in memory. Let's load it.
+            match self.arena.start_loading_or_wait(page_spec) {
+                LoadState::Loading => {
+                    // we are the loader. get a free page and load things
+                    if let Some(mut page) = self.arena.free_page() {
+                        match domain.load_page(index, &mut page) {
+                            Ok(_) => {
+                                let handle = self.arena.finish_loading(page_spec, page);
+                                Ok(Some(handle.get_loaded_vec(index_in_page)))
+                            },
+                            Err(e) => {
+                                // something went wrong. cancel the load
+                                self.arena.cancel_loading(page_spec, page);
+                                Err(e)
+                            }
+                        }
+                    } else {
+                        Err(io::Error::new(io::ErrorKind::Other, "no more free space in vector arena"))
+                    }
+                }
+                LoadState::Loaded(page) => {
+                    Ok(Some(page.get_loaded_vec(index_in_page)))
+                }
+                LoadState::Canceled => {
+                    Err(io::Error::new(io::ErrorKind::Other, "load was canceled"))
+                }
+            }
+        }
     }
 }
