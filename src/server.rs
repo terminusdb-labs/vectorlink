@@ -272,7 +272,7 @@ impl Service {
                     .await;
                 let hnsw = start_indexing_from_operations(hnsw, point_ops).unwrap();
                 self.set_index(id, hnsw.into()).await;
-                self.clear_pending(&index_id);
+                self.clear_pending(&index_id).await;
             }
         });
     }
