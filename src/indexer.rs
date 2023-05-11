@@ -17,9 +17,18 @@ use space::{Metric, Neighbor};
 pub type HnswIndex = Hnsw<OpenAI, Point, Lcg128Xsl64, 12, 24>;
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Point {
-    id: String,
-    vec: LoadedVec,
+pub enum Point {
+    Stored { id: String, vec: LoadedVec },
+    Mem { vec: Box<Embedding> },
+}
+
+impl Point {
+    fn vec(&self) -> &Embedding {
+        match self {
+            Point::Stored { id: _, vec } => vec,
+            Point::Mem { vec } => vec,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -28,8 +37,8 @@ pub struct OpenAI;
 impl Metric<Point> for OpenAI {
     type Unit = u32;
     fn distance(&self, p1: &Point, p2: &Point) -> u32 {
-        let a = &p1.vec;
-        let b = &p2.vec;
+        let a = p1.vec();
+        let b = p2.vec();
         let f = a.iter().zip(b.iter()).map(|(&a, &b)| (a - b)).sum::<f32>();
         (1.0 - f).to_bits()
     }
@@ -72,10 +81,10 @@ pub async fn operations_to_point_operations(
     let mut new_ops: Vec<PointOperation> = zip(tuples, loaded_vecs)
         .map(|((op, _, id), vec)| match op {
             Op::Insert => PointOperation::Insert {
-                point: Point { vec, id },
+                point: Point::Stored { vec, id },
             },
             Op::Changed => PointOperation::Replace {
-                point: Point { vec, id },
+                point: Point::Stored { vec, id },
             },
         })
         .collect();
@@ -187,25 +196,25 @@ mod tests {
 
         let operations: Vec<_> = [
             PointOperation::Insert {
-                point: Point {
+                point: Point::Stored {
                     id: "Point/1".to_string(),
-                    vec: e1,
+                    vec: e1.clone(),
                 },
             },
             PointOperation::Insert {
-                point: Point {
+                point: Point::Stored {
                     id: "Point/2".to_string(),
-                    vec: e2,
+                    vec: e2.clone(),
                 },
             },
             PointOperation::Insert {
-                point: Point {
+                point: Point::Stored {
                     id: "Point/3".to_string(),
                     vec: e3,
                 },
             },
             PointOperation::Insert {
-                point: Point {
+                point: Point::Stored {
                     id: "Point/4".to_string(),
                     vec: e4,
                 },
@@ -217,18 +226,14 @@ mod tests {
         let mut candidate_vec: Embedding = [0.0; 1536];
         candidate_vec[0] = 0.707;
         candidate_vec[1] = 0.707;
-        let id = store.add_vecs(&domain, [candidate_vec].iter()).unwrap();
-        assert_eq!(id[0], 4);
-        let q1 = store.get_vec(&domain, 4).unwrap().unwrap();
 
-        let p = Point {
-            id: "unknown".to_string(),
-            vec: q1,
+        let p = Point::Mem {
+            vec: Box::new(candidate_vec),
         };
         let points = search(&p, 4, hnsw).unwrap();
         let p1 = &points[0];
         let p2 = &points[1];
-        assert_eq!(p1.point.vec, e1);
-        assert_eq!(p2.point.vec, e2);
+        assert_eq!(*p1.point.vec(), *e1);
+        assert_eq!(*p2.point.vec(), *e2);
     }
 }
