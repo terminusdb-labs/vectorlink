@@ -1,53 +1,16 @@
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io;
+use std::io::{self, SeekFrom, Seek, Write};
 use std::os::unix::prelude::FileExt;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, self};
 use std::sync::{Arc, Weak, Condvar, Mutex, RwLock};
 use std::ops::Deref;
 
 use lru::LruCache;
 
-use crate::openai::{Embedding, EMBEDDING_LENGTH};
-
-pub struct VectorDomain {
-    name: Arc<String>
-}
-
-
-#[derive(Clone)]
-pub struct LoadableVector {
-    domain: Arc<String>,
-    id: u64
-}
-
-pub struct LoadedVector {
-    loadable: LoadableVector,
-    counter: Arc<()>,
-    vector: *const Embedding
-}
-
-impl LoadableVector {
-    pub fn load(&self) -> LoadedVector {
-        load_vec(&self.domain, self.id)
-    }
-}
-
-impl LoadedVector {
-    pub fn as_loadable(&self) -> LoadableVector {
-        self.loadable.clone()
-    }
-}
-
-impl Deref for LoadedVector {
-    type Target = Embedding;
-
-    fn deref(&self) -> &Self::Target {
-        // We know this is allowed cause we hold an arc counter
-        unsafe { &*self.vector}
-    }
-}
+use crate::openai::{Embedding, EMBEDDING_LENGTH, EmbeddingBytes, EMBEDDING_BYTE_LENGTH};
 
 // 3 memory pages of 4K hold 2 OpenAI vectors.
 // We set things up so that blocks are some multiple of 2 pages.
@@ -72,43 +35,85 @@ struct PinnedVectorPage {
 struct Domain {
     name: Arc<String>,
     index: usize,
-    file: File
+    read_file: File,
+    write_file: Mutex<File>,
+    num_vecs: AtomicUsize
 }
 
 impl Domain {
     fn open(dir: &PathBuf, name: &str, index: usize) -> io::Result<Self> {
         let mut path = dir.clone();
         path.push(format!("{name}.vecs"));
-        let file = File::options()
+        let mut write_file = File::options()
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
+            .open(&path)?;
+        let pos = write_file.seek(SeekFrom::End(0))?;
+        if pos as usize % EMBEDDING_BYTE_LENGTH != 0 {
+            panic!("domain {name} has unexpected length");
+        }
+        let num_vecs = AtomicUsize::new(pos as usize / EMBEDDING_BYTE_LENGTH);
+        let write_file = Mutex::new(write_file);
+        let read_file = File::options()
+            .read(true)
+            .write(false)
+            .create(false)
             .truncate(false)
             .open(path)?;
 
         Ok(Domain {
             name: Arc::new(name.to_string()),
             index,
-            file,
+            read_file,
+            write_file,
+            num_vecs,
         })
     }
 
-    fn add_vecs(&mut self, vecs: &[Embedding]) -> io::Result<()> {
-        todo!();
+    fn add_vecs<'a, I:Iterator<Item=&'a Embedding>>(&self, vecs: I) -> io::Result<()> {
+        let mut write_file = self.write_file.lock().unwrap();
+        let mut count = 0;
+        for embedding in vecs {
+            let bytes: &EmbeddingBytes = unsafe {std::mem::transmute(embedding)};
+            write_file.write_all(bytes)?;
+            count += 1;
+        }
+        write_file.flush()?;
+        write_file.sync_data()?;
+        let mut num_vecs = self.num_vecs.load(atomic::Ordering::Relaxed);
+        num_vecs += count;
+        self.num_vecs.store(num_vecs, atomic::Ordering::Relaxed);
+
+        Ok(())
     }
 
-    fn load_page(&mut self, index: usize, data: &mut VectorPage) -> io::Result<bool> {
-        let offset = (index * std::mem::size_of::<VectorPage>()) as u64;
-        let data: &mut VectorPageBytes = unsafe { std::mem::transmute(data) };
-        let result = self.file.read_exact_at(data, offset);
-        if result.is_err() && result.as_ref().err().unwrap().kind() == io::ErrorKind::UnexpectedEof {
-            // this page doesn't exist.
+    fn load_page(&self, index: usize, data: &mut VectorPage) -> io::Result<bool> {
+        let offset = index * std::mem::size_of::<VectorPage>();
+        let end = self.num_vecs() * std::mem::size_of::<Embedding>();
+        if end <= offset {
+            // this page does not exist.
             return Ok(false);
         }
-        // any other error can propagate
-        result?;
+        let remainder = end - offset;
+        let data_len = if remainder >= std::mem::size_of::<Embedding>() { std::mem::size_of::<Embedding>() } else { remainder };
+        let data: &mut VectorPageBytes = unsafe { std::mem::transmute(data) };
+        let data_slice = &mut data[..data_len];
+        self.read_file.read_exact_at(data_slice, offset as u64)?;
 
         Ok(true)
+    }
+
+    fn load_partial_page(&self, index: usize, offset: usize, data: &mut [u8]) -> io::Result<()> {
+        assert!(offset + data.len() <= std::mem::size_of::<VectorPage>(),
+                "requested partial load would read past a page boundary");
+        let offset = index * std::mem::size_of::<VectorPage>() + offset;
+        self.read_file.read_exact_at(data, offset as u64)
+    }
+
+    fn num_vecs(&self) -> usize {
+        self.num_vecs.load(atomic::Ordering::Relaxed)
     }
 }
 
@@ -382,16 +387,14 @@ impl Deref for LoadedVec {
 
 struct VectorStore {
     dir: PathBuf,
-    free: Vec<Pin<Box<VectorPage>>>,
-    loaded: HashMap<PageSpec, LoadedVectorPage>,
-    cache: LruCache<PageSpec, LoadedVectorPage>,
+    arena: Arc<PageArena>,
     domains: HashMap<String, Domain>
 }
 
 impl VectorStore {
     pub fn add_vecs(&mut self, domain: &str, vecs: &[Embedding]) -> io::Result<()> {
         let domain = self.get_or_add_domain(domain)?;
-        domain.add_vecs(vecs)?;
+        domain.add_vecs(vecs.iter())?;
         // TODO this could mean that a page is now invalid. Gotta make sure it gets updated :o
         // We know this has no effect on any loaded vectors, cause we do not overwrite things.
         // So any existing pointers out there can just remain valid. We just need to get at the right page and update it.
@@ -408,58 +411,4 @@ impl VectorStore {
 
         Ok(self.domains.get_mut(name).unwrap())
     }
-
-    fn get_page(&mut self, domain: &mut Domain, index: usize) -> io::Result<Option<&mut LoadedVectorPage>> {
-        let pageSpec = PageSpec {
-            domain: domain.index,
-            index,
-        };
-        let mut found = self.loaded.contains_key(&pageSpec);
-        if !found {
-            // page is not currently loaded. it might still be in cache.
-            if let Some(page) = self.cache.pop(&pageSpec) {
-                found = true;
-                // we'll have to move it into loaded.
-                self.loaded.insert(pageSpec, page);
-            } else {
-                // turns out it is not in cache. time to go to disk and get it from there.
-                // We'll need a free page first to handle this load.
-                // It can come from either the free arena, or from the cache.
-                let free = self.free.pop()
-                    .or_else(|| self.cache.pop_lru().map(|x|x.1.page));
-                if let Some(mut free) = free {
-                    let result = domain.load_page(index, &mut free);
-                    if result.is_err() {
-                        // whoops, something went wrong. move page back into the free arena
-                        self.free.push(free);
-                        return Err(result.err().unwrap());
-                    }
-                    let found = result.unwrap();
-                    if found {
-                        // great, we managed to load this page. let's move it into loaded
-                        self.loaded.insert(pageSpec, LoadedVectorPage {
-                            index,
-                            page: free
-                        });
-                    } else {
-                        // page not found, so move back into free arena.
-                        self.free.push(free);
-                    }
-                } else {
-                    // TODO dynamically grow free pool up to an upper limit
-                    return Err(io::Error::new(io::ErrorKind::Other, "no available buffer to load vector page"));
-                }
-            }
-        }
-
-        if found {
-            Ok(Some(self.loaded.get_mut(&pageSpec).unwrap()))
-        } else {
-            Ok(None)
-        }
-    }
-}
-
-pub fn load_vec(domain: &str, id: u64) -> LoadedVector {
-    todo!();
 }

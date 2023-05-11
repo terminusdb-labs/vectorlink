@@ -20,7 +20,9 @@ struct EmbeddingResponse {
 }
 
 pub const EMBEDDING_LENGTH:  usize = 1536;
+pub const EMBEDDING_BYTE_LENGTH:  usize = EMBEDDING_LENGTH*4;
 pub type Embedding = [f32;EMBEDDING_LENGTH];
+pub type EmbeddingBytes = [u8;EMBEDDING_BYTE_LENGTH];
 
 #[derive(Deserialize, Debug)]
 struct EmbeddingData {
