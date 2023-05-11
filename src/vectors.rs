@@ -473,6 +473,7 @@ impl PageHandle {
     }
 }
 
+#[derive(Clone)]
 pub struct LoadedVec {
     page: Arc<PageHandle>,
     vec: *const Embedding,
@@ -508,6 +509,12 @@ impl Deref for LoadedVec {
         // the lifetime of LoadedVecl.
 
         unsafe { &*self.vec }
+    }
+}
+
+impl PartialEq for LoadedVec {
+    fn eq(&self, other: &Self) -> bool {
+        *self == *other
     }
 }
 
@@ -693,7 +700,6 @@ mod tests {
     use crate::openai::random_embedding;
 
     use super::*;
-    use tempfile;
 
     use rand::prelude::*;
     use rand::SeedableRng;

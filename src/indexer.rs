@@ -1,4 +1,8 @@
-use std::{io, iter, sync::Arc};
+use std::{
+    io,
+    iter::{self, zip},
+    sync::Arc,
+};
 
 use hnsw::{Hnsw, Searcher};
 use rand_pcg::Lcg128Xsl64;
@@ -51,37 +55,39 @@ pub async fn operations_to_point_operations(
     structs: Vec<Result<Operation, std::io::Error>>,
 ) -> Vec<PointOperation> {
     let ops: Vec<Operation> = structs.into_iter().map(|ro| ro.unwrap()).collect();
-    let tuples: Vec<(Op,String,String)> = ops
+    let tuples: Vec<(Op, String, String)> = ops
         .iter()
         .flat_map(|o| match o {
             Operation::Inserted { string, id } => Some((Op::Insert, string.into(), id.into())),
             Operation::Changed { string, id } => Some((Op::Changed, string.into(), id.into())),
             Operation::Deleted { id: _ } => None,
-        });
-    let strings : Vec<String> = tuples.iter().map(|(_,s,_)| s.to_string()).collect();
+        })
+        .collect();
+    let strings: Vec<String> = tuples.iter().map(|(_, s, _)| s.to_string()).collect();
     let vecs: Vec<Embedding> = embeddings_for(API_KEY, &strings).await.unwrap();
     let domain = vector_store.get_domain(domain).unwrap();
     let ids = vector_store.add_vecs(&domain, vecs.iter()).unwrap();
-    let new_ops:; Vec<PointOperation> = zip(tuples,vecs)
-        .map(
-        .into_iter()
-        .enumerate()
-        .map(|(i, o)| match o {
-            Operation::Inserted { string: _, id } => PointOperation::Insert {
-                point: Point {
-                    vec: Arc::new(vecs[i]),
-                    id,
+    let mut new_ops: Vec<PointOperation> = zip(tuples, ids)
+        .map(|((op, s, id), idx)| {
+            let vec = vector_store.get_vec(&domain, idx).unwrap().unwrap();
+            match op {
+                Op::Insert => PointOperation::Insert {
+                    point: Point { vec, id },
                 },
-            },
-            Operation::Changed { string: _, id } => PointOperation::Replace {
-                point: Point {
-                    vec: Arc::new(vecs[i]),
-                    id,
+                Op::Changed => PointOperation::Replace {
+                    point: Point { vec, id },
                 },
-            },
-            Operation::Deleted { id } => PointOperation::Delete { id },
+            }
         })
         .collect();
+    let mut delete_ops: Vec<_> = ops
+        .into_iter()
+        .flat_map(|o| match o {
+            Operation::Deleted { id } => Some(PointOperation::Delete { id }),
+            _ => None,
+        })
+        .collect();
+    new_ops.append(&mut delete_ops);
     new_ops
 }
 

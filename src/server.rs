@@ -262,7 +262,8 @@ impl Service {
                 .chunks(100);
                 let mut point_ops: Vec<PointOperation> = Vec::new();
                 while let Some(structs) = opstream.next().await {
-                    let mut new_ops = operations_to_point_operations(structs).await;
+                    let mut new_ops =
+                        operations_to_point_operations(&domain, &self.vector_store, structs).await;
                     point_ops.append(&mut new_ops)
                 }
                 let id = create_index_id(&commit, &domain);
