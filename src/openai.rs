@@ -5,6 +5,7 @@ use serde::{
     Deserialize, Deserializer, Serialize,
 };
 use thiserror::Error;
+use rand::Rng;
 
 #[derive(Serialize)]
 struct EmbeddingRequest<'a> {
@@ -26,6 +27,17 @@ pub const EMBEDDING_LENGTH: usize = 1536;
 pub const EMBEDDING_BYTE_LENGTH: usize = EMBEDDING_LENGTH * 4;
 pub type Embedding = [f32; EMBEDDING_LENGTH];
 pub type EmbeddingBytes = [u8; EMBEDDING_BYTE_LENGTH];
+
+pub fn empty_embedding() -> Embedding {
+    [0.0;EMBEDDING_LENGTH]
+}
+
+pub fn random_embedding<R:Rng>(rng:&mut R) -> Embedding {
+    let mut embedding = [0.0;EMBEDDING_LENGTH];
+    rng.fill(&mut embedding[..]);
+
+    embedding
+}
 
 #[derive(Deserialize, Debug)]
 struct EmbeddingData {

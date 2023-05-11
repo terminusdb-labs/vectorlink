@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{self, SeekFrom, Seek, Write};
 use std::os::unix::prelude::FileExt;
@@ -94,10 +95,12 @@ impl Domain {
         let end = self.num_vecs() * std::mem::size_of::<Embedding>();
         if end <= offset {
             // this page does not exist.
+            eprintln!(" :( page {} does not exist (need {} but end is {})", index, offset, end);
             return Ok(false);
         }
         let remainder = end - offset;
-        let data_len = if remainder >= std::mem::size_of::<Embedding>() { std::mem::size_of::<Embedding>() } else { remainder };
+        let data_len = if remainder >= std::mem::size_of::<VectorPage>() { std::mem::size_of::<VectorPage>() } else { remainder };
+        eprintln!("loading page {}, range at offset {} of len {}", index, offset, data_len);
         let data: &mut VectorPageBytes = unsafe { std::mem::transmute(data) };
         let data_slice = &mut data[..data_len];
         self.read_file.read_exact_at(data_slice, offset as u64)?;
@@ -109,6 +112,7 @@ impl Domain {
         assert!(offset + data.len() <= std::mem::size_of::<VectorPage>(),
                 "requested partial load would read past a page boundary");
         let offset = index * std::mem::size_of::<VectorPage>() + offset;
+        eprintln!("loading partial range at offset {} of len {}", offset, data.len());
         self.read_file.read_exact_at(data, offset as u64)
     }
 
@@ -147,7 +151,22 @@ impl LoadState {
     }
 }
 
+impl Default for PageArena {
+    fn default() -> Self {
+        Self {
+            free: Default::default(),
+            loading: Default::default(),
+            loaded: Default::default(),
+            cache: RwLock::new(LruCache::unbounded())
+        }
+    }
+}
+
 impl PageArena {
+    fn new() -> Self {
+        Self::default()
+    }
+
     fn alloc_free_pages(&self, count: usize) {
         if count == 0 {
             return;
@@ -155,7 +174,7 @@ impl PageArena {
         // TODO would be much better if we could have uninit allocs.
         let mut free = self.free.lock().unwrap();
         let zeroed = Box::pin([0.0f32;VECTOR_PAGE_FLOAT_SIZE]);
-        for _ in 0..=count {
+        for _ in 0..count-1 {
             free.push(zeroed.clone());
         }
         free.push(zeroed);
@@ -327,6 +346,25 @@ impl PageArena {
         self.cached_to_loaded(spec)
             .or_else(|| self.page_from_loaded(spec))
     }
+
+    pub fn statistics(&self) -> VectorStoreStatistics {
+        let free = self.free.lock().unwrap().len();
+        let loading = self.loading.lock().unwrap().len();
+        let loaded = self.loaded.read().unwrap().len();
+        let cached = self.cache.read().unwrap().len();
+
+        VectorStoreStatistics {
+            free, loading, loaded, cached
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VectorStoreStatistics {
+    free: usize,
+    loading: usize,
+    loaded: usize,
+    cached: usize
 }
 
 struct PageHandle {
@@ -381,6 +419,14 @@ pub struct LoadedVec {
     vec: *const Embedding
 }
 
+/*
+impl fmt::Debug for LoadedVec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "LoadedVec({:?})", self.vec)
+    }
+}
+*/
+
 impl Deref for LoadedVec {
     type Target = Embedding;
 
@@ -403,6 +449,17 @@ pub struct VectorStore {
 }
 
 impl VectorStore {
+    pub fn new<P:Into<PathBuf>>(path: P, num_bufs: usize) -> Self {
+        let arena = PageArena::new();
+        arena.alloc_free_pages(num_bufs);
+
+        Self {
+            dir: path.into(),
+            arena: Arc::new(arena),
+            domains: Default::default()
+        }
+    }
+
     pub fn get_domain(&self, name: &str) -> io::Result<Arc<Domain>> {
         let domains = self.domains.read().unwrap();
         if let Some(domain) = domains.get(name) {
@@ -421,7 +478,7 @@ impl VectorStore {
         }
     }
 
-    pub fn add_vecs<'a, I:Iterator<Item=&'a Embedding>>(&self, domain: &Domain, vecs: I) -> io::Result<()> {
+    pub fn add_vecs<'a, I:Iterator<Item=&'a Embedding>>(&self, domain: &Domain, vecs: I) -> io::Result<Vec<usize>> {
         let (offset, num_added) = domain.add_vecs(vecs)?;
         if offset % VECTORS_PER_PAGE != 0 {
             // vecs got added to a page that might actually already be in memory. We'll have to refresh it.
@@ -443,11 +500,12 @@ impl VectorStore {
                 domain.load_partial_page(page_index, offset_byte, mutation_range)?;
             }
         }
-        Ok(())
+        Ok((offset..offset+num_added).collect())
     }
 
     pub fn get_vec(&self, domain: &Domain, index: usize) -> io::Result<Option<LoadedVec>> {
-        if domain.num_vecs() >= index {
+        eprintln!("get vec {index}");
+        if domain.num_vecs() <= index {
             return Ok(None);
         }
 
@@ -458,17 +516,23 @@ impl VectorStore {
             index: page_index
         };
         if let Some(page) = self.arena.page_from_any(page_spec) {
+            eprintln!(" found page");
             Ok(Some(page.get_loaded_vec(index_in_page)))
         } else {
+            eprintln!(" did not find page");
             // the page is on disk but not yet in memory. Let's load it.
             match self.arena.start_loading_or_wait(page_spec) {
                 LoadState::Loading => {
+                    eprintln!(" loading page");
                     // we are the loader. get a free page and load things
                     if let Some(mut page) = self.arena.free_page() {
-                        match domain.load_page(index, &mut page) {
-                            Ok(_) => {
+                        match domain.load_page(page_index, &mut page) {
+                            Ok(true) => {
                                 let handle = self.arena.finish_loading(page_spec, page);
                                 Ok(Some(handle.get_loaded_vec(index_in_page)))
+                            },
+                            Ok(false) => {
+                                Err(io::Error::new(io::ErrorKind::NotFound, "page not found"))
                             },
                             Err(e) => {
                                 // something went wrong. cancel the load
@@ -488,5 +552,164 @@ impl VectorStore {
                 }
             }
         }
+    }
+    pub fn statistics(&self) -> VectorStoreStatistics {
+        self.arena.statistics()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::openai::random_embedding;
+
+    use super::*;
+    use tempfile;
+
+    use rand::prelude::*;
+    use rand::SeedableRng;
+
+    #[test]
+    fn create_and_load_vecs() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path();
+        //let path = "/tmp/foo";
+        let store = VectorStore::new(path, 100);
+        let seed: u64 = 42;
+
+        let mut rng = StdRng::seed_from_u64(seed);
+        let e1 = random_embedding(&mut rng);
+        let e2 = random_embedding(&mut rng);
+        let e3 = random_embedding(&mut rng);
+
+        let domain = store.get_domain("foo").unwrap();
+        let ids = store.add_vecs(&domain, [e1,e2,e3].iter()).unwrap();
+        assert_eq!(vec![0,1,2], ids);
+
+        let e1_from_mem = store.get_vec(&domain, 0).unwrap().unwrap();
+        let e2_from_mem = store.get_vec(&domain, 1).unwrap().unwrap();
+        let e3_from_mem = store.get_vec(&domain, 2).unwrap().unwrap();
+
+        assert_eq!(e1, *e1_from_mem);
+        assert_eq!(e2, *e2_from_mem);
+        assert_eq!(e3, *e3_from_mem);
+
+        let store2 = VectorStore::new(path, 100);
+        let e1_from_disk = store2.get_vec(&domain, 0).unwrap().unwrap();
+        let e2_from_disk = store2.get_vec(&domain, 1).unwrap().unwrap();
+        let e3_from_disk = store2.get_vec(&domain, 2).unwrap().unwrap();
+
+        assert_eq!(e1, *e1_from_disk);
+        assert_eq!(e2, *e2_from_disk);
+        assert_eq!(e3, *e3_from_disk);
+    }
+
+    #[test]
+    fn load_incomplete_page_twice() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path();
+        let store = VectorStore::new(path, 100);
+        let seed: u64 = 42;
+
+        let mut rng = StdRng::seed_from_u64(seed);
+        let e1 = random_embedding(&mut rng);
+        let e2 = random_embedding(&mut rng);
+
+        let domain = store.get_domain("foo").unwrap();
+        store.add_vecs(&domain, [e1].iter()).unwrap();
+        let e1_from_mem = store.get_vec(&domain, 0).unwrap().unwrap();
+        store.add_vecs(&domain, [e2].iter()).unwrap();
+        let e2_from_mem = store.get_vec(&domain, 1).unwrap().unwrap();
+
+        assert_eq!(e1, *e1_from_mem);
+        assert_eq!(e2, *e2_from_mem);
+    }
+
+    #[test]
+    fn load_from_cache() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path();
+        let store = VectorStore::new(path, 100);
+        let seed: u64 = 42;
+
+        assert_eq!(VectorStoreStatistics {
+            free: 100,
+            loading: 0,
+            loaded: 0,
+            cached: 0
+        }, store.statistics());
+
+        let mut rng = StdRng::seed_from_u64(seed);
+        let e1 = random_embedding(&mut rng);
+
+        let domain = store.get_domain("foo").unwrap();
+        store.add_vecs(&domain, [e1].iter()).unwrap();
+        let e1_from_mem = store.get_vec(&domain, 0).unwrap().unwrap();
+        assert_eq!(VectorStoreStatistics {
+            free: 99,
+            loading: 0,
+            loaded: 1,
+            cached: 0
+        }, store.statistics());
+        std::mem::drop(e1_from_mem);
+        assert_eq!(VectorStoreStatistics {
+            free: 99,
+            loading: 0,
+            loaded: 0,
+            cached: 1
+        }, store.statistics());
+        let _e1_from_mem = store.get_vec(&domain, 0).unwrap().unwrap();
+
+        assert_eq!(VectorStoreStatistics {
+            free: 99,
+            loading: 0,
+            loaded: 1,
+            cached: 0
+        }, store.statistics());
+    }
+
+    #[test]
+    fn reload_from_disk() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path();
+        let store = VectorStore::new(path, 1);
+        let seed: u64 = 42;
+
+        assert_eq!(VectorStoreStatistics {
+            free: 1,
+            loading: 0,
+            loaded: 0,
+            cached: 0
+        }, store.statistics());
+
+        let mut rng = StdRng::seed_from_u64(seed);
+        let e1 = random_embedding(&mut rng);
+        let e2 = random_embedding(&mut rng);
+        let e3 = random_embedding(&mut rng);
+
+        let domain = store.get_domain("foo").unwrap();
+        store.add_vecs(&domain, [e1,e2,e3].iter()).unwrap();
+        let e1_from_mem = store.get_vec(&domain, 0).unwrap().unwrap();
+        assert_eq!(VectorStoreStatistics {
+            free: 0,
+            loading: 0,
+            loaded: 1,
+            cached: 0
+        }, store.statistics());
+        std::mem::drop(e1_from_mem);
+        assert_eq!(VectorStoreStatistics {
+            free: 0,
+            loading: 0,
+            loaded: 0,
+            cached: 1
+        }, store.statistics());
+        let e3_from_mem = store.get_vec(&domain, 2).unwrap().unwrap();
+
+        assert_eq!(VectorStoreStatistics {
+            free: 0,
+            loading: 0,
+            loaded: 1,
+            cached: 0
+        }, store.statistics());
+        assert_eq!(e3, *e3_from_mem);
     }
 }
