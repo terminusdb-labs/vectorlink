@@ -1,37 +1,37 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};
-use std::io::{self, SeekFrom, Seek, Write};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::mem::MaybeUninit;
+use std::ops::Deref;
 use std::os::unix::prelude::FileExt;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, self};
-use std::sync::{Arc, Weak, Condvar, Mutex, RwLock};
-use std::ops::Deref;
+use std::sync::atomic::{self, AtomicUsize};
+use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 
 use lru::LruCache;
 
-use crate::openai::{Embedding, EMBEDDING_LENGTH, EmbeddingBytes, EMBEDDING_BYTE_LENGTH};
+use crate::openai::{Embedding, EmbeddingBytes, EMBEDDING_BYTE_LENGTH, EMBEDDING_LENGTH};
 
 // 3 memory pages of 4K hold 2 OpenAI vectors.
 // We set things up so that blocks are some multiple of 2 pages.
 const VECTOR_PAGE_MULTIPLIER: usize = 1;
-const VECTOR_PAGE_BYTE_SIZE: usize = VECTOR_PAGE_MULTIPLIER*3*4096;
-const VECTOR_PAGE_FLOAT_SIZE: usize = VECTOR_PAGE_BYTE_SIZE/4;
+const VECTOR_PAGE_BYTE_SIZE: usize = VECTOR_PAGE_MULTIPLIER * 3 * 4096;
+const VECTOR_PAGE_FLOAT_SIZE: usize = VECTOR_PAGE_BYTE_SIZE / 4;
 const VECTORS_PER_PAGE: usize = VECTOR_PAGE_FLOAT_SIZE / EMBEDDING_LENGTH;
 
-type VectorPage = [f32;VECTOR_PAGE_FLOAT_SIZE];
-type VectorPageBytes = [u8;VECTOR_PAGE_BYTE_SIZE];
+type VectorPage = [f32; VECTOR_PAGE_FLOAT_SIZE];
+type VectorPageBytes = [u8; VECTOR_PAGE_BYTE_SIZE];
 
 struct LoadedVectorPage {
     index: usize,
-    page: Pin<Box<VectorPage>>
+    page: Pin<Box<VectorPage>>,
 }
 
 struct PinnedVectorPage {
     page: LoadedVectorPage,
-    handle: Weak<PageHandle>
+    handle: Weak<PageHandle>,
 }
 
 pub struct Domain {
@@ -39,7 +39,7 @@ pub struct Domain {
     index: usize,
     read_file: File,
     write_file: Mutex<File>,
-    num_vecs: AtomicUsize
+    num_vecs: AtomicUsize,
 }
 
 impl Domain {
@@ -74,11 +74,14 @@ impl Domain {
         })
     }
 
-    fn add_vecs<'a, I:Iterator<Item=&'a Embedding>>(&self, vecs: I) -> io::Result<(usize, usize)> {
+    fn add_vecs<'a, I: Iterator<Item = &'a Embedding>>(
+        &self,
+        vecs: I,
+    ) -> io::Result<(usize, usize)> {
         let mut write_file = self.write_file.lock().unwrap();
         let mut count = 0;
         for embedding in vecs {
-            let bytes: &EmbeddingBytes = unsafe {std::mem::transmute(embedding)};
+            let bytes: &EmbeddingBytes = unsafe { std::mem::transmute(embedding) };
             write_file.write_all(bytes)?;
             count += 1;
         }
@@ -96,12 +99,22 @@ impl Domain {
         let end = self.num_vecs() * std::mem::size_of::<Embedding>();
         if end <= offset {
             // this page does not exist.
-            eprintln!(" :( page {} does not exist (need {} but end is {})", index, offset, end);
+            eprintln!(
+                " :( page {} does not exist (need {} but end is {})",
+                index, offset, end
+            );
             return Ok(false);
         }
         let remainder = end - offset;
-        let data_len = if remainder >= std::mem::size_of::<VectorPage>() { std::mem::size_of::<VectorPage>() } else { remainder };
-        eprintln!("loading page {}, range at offset {} of len {}", index, offset, data_len);
+        let data_len = if remainder >= std::mem::size_of::<VectorPage>() {
+            std::mem::size_of::<VectorPage>()
+        } else {
+            remainder
+        };
+        eprintln!(
+            "loading page {}, range at offset {} of len {}",
+            index, offset, data_len
+        );
         let data: &mut VectorPageBytes = unsafe { std::mem::transmute(data) };
         let data_slice = &mut data[..data_len];
         self.read_file.read_exact_at(data_slice, offset as u64)?;
@@ -110,10 +123,16 @@ impl Domain {
     }
 
     fn load_partial_page(&self, index: usize, offset: usize, data: &mut [u8]) -> io::Result<()> {
-        assert!(offset + data.len() <= std::mem::size_of::<VectorPage>(),
-                "requested partial load would read past a page boundary");
+        assert!(
+            offset + data.len() <= std::mem::size_of::<VectorPage>(),
+            "requested partial load would read past a page boundary"
+        );
         let offset = index * std::mem::size_of::<VectorPage>() + offset;
-        eprintln!("loading partial range at offset {} of len {}", offset, data.len());
+        eprintln!(
+            "loading partial range at offset {} of len {}",
+            offset,
+            data.len()
+        );
         self.read_file.read_exact_at(data, offset as u64)
     }
 
@@ -140,14 +159,14 @@ enum LoadState {
     #[default]
     Loading,
     Loaded(Arc<PageHandle>),
-    Canceled
+    Canceled,
 }
 
 impl LoadState {
     fn is_loading(&self) -> bool {
         match self {
             Self::Loading => true,
-            _ => false
+            _ => false,
         }
     }
 }
@@ -158,7 +177,7 @@ impl Default for PageArena {
             free: Default::default(),
             loading: Default::default(),
             loaded: Default::default(),
-            cache: RwLock::new(LruCache::unbounded())
+            cache: RwLock::new(LruCache::unbounded()),
         }
     }
 }
@@ -174,8 +193,8 @@ impl PageArena {
         }
         // TODO would be much better if we could have uninit allocs.
         let mut free = self.free.lock().unwrap();
-        let zeroed = Box::pin([0.0f32;VECTOR_PAGE_FLOAT_SIZE]);
-        for _ in 0..count-1 {
+        let zeroed = Box::pin([0.0f32; VECTOR_PAGE_FLOAT_SIZE]);
+        for _ in 0..count - 1 {
             free.push(zeroed.clone());
         }
         free.push(zeroed);
@@ -188,12 +207,12 @@ impl PageArena {
 
     fn free_page_from_cache(&self) -> Option<Pin<Box<VectorPage>>> {
         let mut cache = self.cache.write().unwrap();
-        cache.pop_lru().map(|p|p.1.page)
+        cache.pop_lru().map(|p| p.1.page)
     }
 
     fn free_page(&self) -> Option<Pin<Box<VectorPage>>> {
         self.free_page_from_free()
-            .or_else(||self.free_page_from_cache())
+            .or_else(|| self.free_page_from_cache())
     }
 
     fn page_is_loaded(&self, spec: PageSpec) -> bool {
@@ -208,7 +227,7 @@ impl PageArena {
 
     fn start_loading_or_wait(self: &Arc<Self>, spec: PageSpec) -> LoadState {
         let mut loading = self.loading.lock().unwrap();
-        if let Some(x) = loading.get(&spec).map(|x|x.clone()) {
+        if let Some(x) = loading.get(&spec).map(|x| x.clone()) {
             // someone is already loading. Let's wait.
             std::mem::drop(loading);
             let (cv, m) = &*x;
@@ -233,20 +252,31 @@ impl PageArena {
         }
     }
 
-    fn finish_loading(self: &Arc<Self>, spec: PageSpec, page: Pin<Box<VectorPage>>) -> Arc<PageHandle> {
+    fn finish_loading(
+        self: &Arc<Self>,
+        spec: PageSpec,
+        page: Pin<Box<VectorPage>>,
+    ) -> Arc<PageHandle> {
         let index = spec.index;
-        let handle = Arc::new(PageHandle { spec, arena: self.clone(), p: &*page});
+        let handle = Arc::new(PageHandle {
+            spec,
+            arena: self.clone(),
+            p: &*page,
+        });
         let mut loaded = self.loaded.write().unwrap();
-        loaded.insert(spec, PinnedVectorPage {
-            handle: Arc::downgrade(&handle),
-            page: LoadedVectorPage {
-                index,
-                page
-            }});
+        loaded.insert(
+            spec,
+            PinnedVectorPage {
+                handle: Arc::downgrade(&handle),
+                page: LoadedVectorPage { index, page },
+            },
+        );
         std::mem::drop(loaded);
 
         let mut loading = self.loading.lock().unwrap();
-        let x = loading.remove(&spec).expect("entry that was finished loading was not in load map");
+        let x = loading
+            .remove(&spec)
+            .expect("entry that was finished loading was not in load map");
         let (cv, m) = &*x;
 
         let mut load_state = m.lock().unwrap();
@@ -262,7 +292,9 @@ impl PageArena {
         std::mem::drop(free);
 
         let mut loading = self.loading.lock().unwrap();
-        let x = loading.remove(&spec).expect("entry that canceled loading was not in load map");
+        let x = loading
+            .remove(&spec)
+            .expect("entry that canceled loading was not in load map");
         let (cv, m) = &*x;
 
         let mut load_state = m.lock().unwrap();
@@ -276,14 +308,18 @@ impl PageArena {
         let mut loaded = self.loaded.write().unwrap();
         let mut cache = self.cache.write().unwrap();
 
-        if loaded.get(&spec).expect("page that was supposedly loaded was not found in the load map")
-            .handle.strong_count() != 0 {
-                // Whoops! Looks like someone re-acquired this page while we weren't looking!
-                // Best to leave it alone.
-                return false;
-            }
-        assert!(!cache.contains(&spec),
-                "page already in cache");
+        if loaded
+            .get(&spec)
+            .expect("page that was supposedly loaded was not found in the load map")
+            .handle
+            .strong_count()
+            != 0
+        {
+            // Whoops! Looks like someone re-acquired this page while we weren't looking!
+            // Best to leave it alone.
+            return false;
+        }
+        assert!(!cache.contains(&spec), "page already in cache");
         let page = loaded.remove(&spec).unwrap();
         cache.get_or_insert(spec, move || page.page);
 
@@ -301,9 +337,23 @@ impl PageArena {
             return None;
         }
         let page = page.unwrap();
-        let handle = Arc::new(PageHandle { spec, arena: self.clone(), p: &*page.page });
-        assert!(loaded.insert(spec, PinnedVectorPage { page, handle: Arc::downgrade(&handle) }).is_none(),
-                "page from cache was already in load map");
+        let handle = Arc::new(PageHandle {
+            spec,
+            arena: self.clone(),
+            p: &*page.page,
+        });
+        assert!(
+            loaded
+                .insert(
+                    spec,
+                    PinnedVectorPage {
+                        page,
+                        handle: Arc::downgrade(&handle)
+                    }
+                )
+                .is_none(),
+            "page from cache was already in load map"
+        );
 
         Some(handle)
     }
@@ -329,7 +379,11 @@ impl PageArena {
                         Some(handle)
                     } else {
                         // we got here first! create new handle.
-                        let handle = Arc::new(PageHandle { spec, arena: self.clone(), p: &*page.page.page });
+                        let handle = Arc::new(PageHandle {
+                            spec,
+                            arena: self.clone(),
+                            p: &*page.page.page,
+                        });
                         page.handle = Arc::downgrade(&handle);
                         Some(handle)
                     }
@@ -355,7 +409,10 @@ impl PageArena {
         let cached = self.cache.read().unwrap().len();
 
         VectorStoreStatistics {
-            free, loading, loaded, cached
+            free,
+            loading,
+            loaded,
+            cached,
         }
     }
 }
@@ -365,13 +422,13 @@ pub struct VectorStoreStatistics {
     free: usize,
     loading: usize,
     loaded: usize,
-    cached: usize
+    cached: usize,
 }
 
 struct PageHandle {
     arena: Arc<PageArena>,
     spec: PageSpec,
-    p: *const VectorPage
+    p: *const VectorPage,
 }
 
 unsafe impl Send for PageHandle {}
@@ -386,7 +443,10 @@ impl Drop for PageHandle {
 impl PageHandle {
     pub fn get_vec(&self, index: usize) -> &Embedding {
         if index >= VECTORS_PER_PAGE {
-            panic!("index bigger than max vectors per page ({}): {}", VECTORS_PER_PAGE, index);
+            panic!(
+                "index bigger than max vectors per page ({}): {}",
+                VECTORS_PER_PAGE, index
+            );
         }
 
         // This pointer should be valid, because the only way for
@@ -394,31 +454,35 @@ impl PageHandle {
         // returns the pagehandle as an arc, and the page doesn't get
         // moved out of the loaded pages unless this arc's refcount is
         // 0.
-        unsafe {&*(self.p as *const Embedding).offset(index as isize)}
+        unsafe { &*(self.p as *const Embedding).offset(index as isize) }
     }
 
     pub fn get_loaded_vec(self: &Arc<Self>, index: usize) -> LoadedVec {
         if index >= VECTORS_PER_PAGE {
-            panic!("index bigger than max vectors per page ({}): {}", VECTORS_PER_PAGE, index);
+            panic!(
+                "index bigger than max vectors per page ({}): {}",
+                VECTORS_PER_PAGE, index
+            );
         }
 
-        let vec = unsafe {(self.p as *const Embedding).offset(index as isize) };
+        let vec = unsafe { (self.p as *const Embedding).offset(index as isize) };
         LoadedVec {
             page: self.clone(),
-            vec
+            vec,
         }
     }
 }
 
 pub struct LoadedVec {
     page: Arc<PageHandle>,
-    vec: *const Embedding
+    vec: *const Embedding,
 }
 
 impl LoadedVec {
     pub fn id(&self) -> usize {
         let page_offset = self.page.spec.index * VECTORS_PER_PAGE;
-        let offset_in_page = (self.vec as usize - self.page.p as usize) / std::mem::size_of::<Embedding>();
+        let offset_in_page =
+            (self.vec as usize - self.page.p as usize) / std::mem::size_of::<Embedding>();
 
         page_offset + offset_in_page
     }
@@ -443,26 +507,25 @@ impl Deref for LoadedVec {
         // ourselves hold one such reference, this won't happen for
         // the lifetime of LoadedVecl.
 
-
-        unsafe {&*self.vec}
+        unsafe { &*self.vec }
     }
 }
 
 pub struct VectorStore {
     dir: PathBuf,
     arena: Arc<PageArena>,
-    domains: RwLock<HashMap<String, Arc<Domain>>>
+    domains: RwLock<HashMap<String, Arc<Domain>>>,
 }
 
 impl VectorStore {
-    pub fn new<P:Into<PathBuf>>(path: P, num_bufs: usize) -> Self {
+    pub fn new<P: Into<PathBuf>>(path: P, num_bufs: usize) -> Self {
         let arena = PageArena::new();
         arena.alloc_free_pages(num_bufs);
 
         Self {
             dir: path.into(),
             arena: Arc::new(arena),
-            domains: Default::default()
+            domains: Default::default(),
         }
     }
 
@@ -484,29 +547,41 @@ impl VectorStore {
         }
     }
 
-    pub fn add_vecs<'a, I:Iterator<Item=&'a Embedding>>(&self, domain: &Domain, vecs: I) -> io::Result<Vec<usize>> {
+    pub fn add_vecs<'a, I: Iterator<Item = &'a Embedding>>(
+        &self,
+        domain: &Domain,
+        vecs: I,
+    ) -> io::Result<Vec<usize>> {
         let (offset, num_added) = domain.add_vecs(vecs)?;
         if offset % VECTORS_PER_PAGE != 0 {
             // vecs got added to a page that might actually already be in memory. We'll have to refresh it.
             let page_index = offset / VECTORS_PER_PAGE;
             let page_spec = PageSpec {
                 domain: domain.index,
-                index: page_index
+                index: page_index,
             };
 
             if let Some(existing_page) = self.arena.page_from_any(page_spec) {
                 // yup, that page existed. We'll partially read the file to get the vecs.
                 let offset_in_page = offset - (page_index * VECTORS_PER_PAGE);
                 let remainder_in_page = VECTORS_PER_PAGE - offset_in_page;
-                let vecs_to_load = if num_added >= remainder_in_page { remainder_in_page } else { num_added };
-                let data: &mut VectorPageBytes = unsafe { std::mem::transmute(&mut *(existing_page.p as *mut [Embedding;VECTORS_PER_PAGE])) };
+                let vecs_to_load = if num_added >= remainder_in_page {
+                    remainder_in_page
+                } else {
+                    num_added
+                };
+                let data: &mut VectorPageBytes = unsafe {
+                    std::mem::transmute(
+                        &mut *(existing_page.p as *mut [Embedding; VECTORS_PER_PAGE]),
+                    )
+                };
                 let offset_byte = offset_in_page * std::mem::size_of::<Embedding>();
                 let end_byte = offset_byte + vecs_to_load * std::mem::size_of::<Embedding>();
                 let mutation_range = &mut data[offset_byte..end_byte];
                 domain.load_partial_page(page_index, offset_byte, mutation_range)?;
             }
         }
-        Ok((offset..offset+num_added).collect())
+        Ok((offset..offset + num_added).collect())
     }
 
     pub fn get_vec(&self, domain: &Domain, index: usize) -> io::Result<Option<LoadedVec>> {
@@ -519,7 +594,7 @@ impl VectorStore {
         let index_in_page = index % VECTORS_PER_PAGE;
         let page_spec = PageSpec {
             domain: domain.index,
-            index: page_index
+            index: page_index,
         };
         if let Some(page) = self.arena.page_from_any(page_spec) {
             eprintln!(" found page");
@@ -536,10 +611,10 @@ impl VectorStore {
                             Ok(true) => {
                                 let handle = self.arena.finish_loading(page_spec, page);
                                 Ok(Some(handle.get_loaded_vec(index_in_page)))
-                            },
+                            }
                             Ok(false) => {
                                 Err(io::Error::new(io::ErrorKind::NotFound, "page not found"))
-                            },
+                            }
                             Err(e) => {
                                 // something went wrong. cancel the load
                                 self.arena.cancel_loading(page_spec, page);
@@ -547,19 +622,24 @@ impl VectorStore {
                             }
                         }
                     } else {
-                        Err(io::Error::new(io::ErrorKind::Other, "no more free space in vector arena"))
+                        Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            "no more free space in vector arena",
+                        ))
                     }
                 }
-                LoadState::Loaded(page) => {
-                    Ok(Some(page.get_loaded_vec(index_in_page)))
-                }
+                LoadState::Loaded(page) => Ok(Some(page.get_loaded_vec(index_in_page))),
                 LoadState::Canceled => {
                     Err(io::Error::new(io::ErrorKind::Other, "load was canceled"))
                 }
             }
         }
     }
-    pub fn add_and_load_vecs<'a, I:Iterator<Item=&'a Embedding>>(&self, domain: &Domain, vecs: I) -> io::Result<Vec<LoadedVec>> {
+    pub fn add_and_load_vecs<'a, I: Iterator<Item = &'a Embedding>>(
+        &self,
+        domain: &Domain,
+        vecs: I,
+    ) -> io::Result<Vec<LoadedVec>> {
         let ids = self.add_vecs(domain, vecs)?;
 
         let mut result = Vec::with_capacity(ids.len());
@@ -577,11 +657,16 @@ impl VectorStore {
         Ok(self.get_vec(domain, ids[0])?.unwrap())
     }
 
-    pub fn add_and_load_vec_array<const N: usize>(&self, domain: &Domain, embeddings: &[Embedding;N]) -> io::Result<[LoadedVec;N]> {
+    pub fn add_and_load_vec_array<const N: usize>(
+        &self,
+        domain: &Domain,
+        embeddings: &[Embedding; N],
+    ) -> io::Result<[LoadedVec; N]> {
         let ids = self.add_vecs(domain, embeddings.iter())?;
 
-        let mut result: [MaybeUninit<LoadedVec>; N] = unsafe { MaybeUninit::uninit().assume_init() };
-        for (r,id) in result.iter_mut().zip(ids.into_iter()) {
+        let mut result: [MaybeUninit<LoadedVec>; N] =
+            unsafe { MaybeUninit::uninit().assume_init() };
+        for (r, id) in result.iter_mut().zip(ids.into_iter()) {
             let e: LoadedVec = self.get_vec(domain, id)?.unwrap();
             r.write(e);
         }
@@ -591,7 +676,7 @@ impl VectorStore {
         // types of the same size, but it seems like this doesn't work
         // yet with const generic arrays. We do a pointer cast
         // instead.
-        let magic = result.as_ptr() as *const [LoadedVec;N];
+        let magic = result.as_ptr() as *const [LoadedVec; N];
         std::mem::forget(result);
         let result = unsafe { magic.read() };
 
@@ -627,8 +712,8 @@ mod tests {
         let e3 = random_embedding(&mut rng);
 
         let domain = store.get_domain("foo").unwrap();
-        let ids = store.add_vecs(&domain, [e1,e2,e3].iter()).unwrap();
-        assert_eq!(vec![0,1,2], ids);
+        let ids = store.add_vecs(&domain, [e1, e2, e3].iter()).unwrap();
+        assert_eq!(vec![0, 1, 2], ids);
 
         let e1_from_mem = store.get_vec(&domain, 0).unwrap().unwrap();
         let e2_from_mem = store.get_vec(&domain, 1).unwrap().unwrap();
@@ -679,12 +764,15 @@ mod tests {
         let store = VectorStore::new(path, 100);
         let seed: u64 = 42;
 
-        assert_eq!(VectorStoreStatistics {
-            free: 100,
-            loading: 0,
-            loaded: 0,
-            cached: 0
-        }, store.statistics());
+        assert_eq!(
+            VectorStoreStatistics {
+                free: 100,
+                loading: 0,
+                loaded: 0,
+                cached: 0
+            },
+            store.statistics()
+        );
 
         let mut rng = StdRng::seed_from_u64(seed);
         let e1 = random_embedding(&mut rng);
@@ -692,27 +780,36 @@ mod tests {
         let domain = store.get_domain("foo").unwrap();
         store.add_vecs(&domain, [e1].iter()).unwrap();
         let e1_from_mem = store.get_vec(&domain, 0).unwrap().unwrap();
-        assert_eq!(VectorStoreStatistics {
-            free: 99,
-            loading: 0,
-            loaded: 1,
-            cached: 0
-        }, store.statistics());
+        assert_eq!(
+            VectorStoreStatistics {
+                free: 99,
+                loading: 0,
+                loaded: 1,
+                cached: 0
+            },
+            store.statistics()
+        );
         std::mem::drop(e1_from_mem);
-        assert_eq!(VectorStoreStatistics {
-            free: 99,
-            loading: 0,
-            loaded: 0,
-            cached: 1
-        }, store.statistics());
+        assert_eq!(
+            VectorStoreStatistics {
+                free: 99,
+                loading: 0,
+                loaded: 0,
+                cached: 1
+            },
+            store.statistics()
+        );
         let _e1_from_mem = store.get_vec(&domain, 0).unwrap().unwrap();
 
-        assert_eq!(VectorStoreStatistics {
-            free: 99,
-            loading: 0,
-            loaded: 1,
-            cached: 0
-        }, store.statistics());
+        assert_eq!(
+            VectorStoreStatistics {
+                free: 99,
+                loading: 0,
+                loaded: 1,
+                cached: 0
+            },
+            store.statistics()
+        );
     }
 
     #[test]
@@ -722,12 +819,15 @@ mod tests {
         let store = VectorStore::new(path, 1);
         let seed: u64 = 42;
 
-        assert_eq!(VectorStoreStatistics {
-            free: 1,
-            loading: 0,
-            loaded: 0,
-            cached: 0
-        }, store.statistics());
+        assert_eq!(
+            VectorStoreStatistics {
+                free: 1,
+                loading: 0,
+                loaded: 0,
+                cached: 0
+            },
+            store.statistics()
+        );
 
         let mut rng = StdRng::seed_from_u64(seed);
         let e1 = random_embedding(&mut rng);
@@ -735,29 +835,38 @@ mod tests {
         let e3 = random_embedding(&mut rng);
 
         let domain = store.get_domain("foo").unwrap();
-        store.add_vecs(&domain, [e1,e2,e3].iter()).unwrap();
+        store.add_vecs(&domain, [e1, e2, e3].iter()).unwrap();
         let e1_from_mem = store.get_vec(&domain, 0).unwrap().unwrap();
-        assert_eq!(VectorStoreStatistics {
-            free: 0,
-            loading: 0,
-            loaded: 1,
-            cached: 0
-        }, store.statistics());
+        assert_eq!(
+            VectorStoreStatistics {
+                free: 0,
+                loading: 0,
+                loaded: 1,
+                cached: 0
+            },
+            store.statistics()
+        );
         std::mem::drop(e1_from_mem);
-        assert_eq!(VectorStoreStatistics {
-            free: 0,
-            loading: 0,
-            loaded: 0,
-            cached: 1
-        }, store.statistics());
+        assert_eq!(
+            VectorStoreStatistics {
+                free: 0,
+                loading: 0,
+                loaded: 0,
+                cached: 1
+            },
+            store.statistics()
+        );
         let e3_from_mem = store.get_vec(&domain, 2).unwrap().unwrap();
 
-        assert_eq!(VectorStoreStatistics {
-            free: 0,
-            loading: 0,
-            loaded: 1,
-            cached: 0
-        }, store.statistics());
+        assert_eq!(
+            VectorStoreStatistics {
+                free: 0,
+                loading: 0,
+                loaded: 1,
+                cached: 0
+            },
+            store.statistics()
+        );
         assert_eq!(e3, *e3_from_mem);
     }
 
@@ -790,7 +899,9 @@ mod tests {
         let e3 = random_embedding(&mut rng);
         let e4 = random_embedding(&mut rng);
         let e5 = random_embedding(&mut rng);
-        let result = store.add_and_load_vecs(&domain, [e1,e2,e3,e4,e5].iter()).unwrap();
+        let result = store
+            .add_and_load_vecs(&domain, [e1, e2, e3, e4, e5].iter())
+            .unwrap();
 
         assert_eq!(e1, *result[0]);
         assert_eq!(e2, *result[1]);
@@ -813,11 +924,10 @@ mod tests {
         let e3 = random_embedding(&mut rng);
         let e4 = random_embedding(&mut rng);
         let e5 = random_embedding(&mut rng);
-        let [e1_from_memory,
-             e2_from_memory,
-             e3_from_memory,
-             e4_from_memory,
-             e5_from_memory] = store.add_and_load_vec_array(&domain, &[e1,e2,e3,e4,e5]).unwrap();
+        let [e1_from_memory, e2_from_memory, e3_from_memory, e4_from_memory, e5_from_memory] =
+            store
+                .add_and_load_vec_array(&domain, &[e1, e2, e3, e4, e5])
+                .unwrap();
 
         assert_eq!(e1, *e1_from_memory);
         assert_eq!(e2, *e2_from_memory);

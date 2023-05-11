@@ -1,11 +1,11 @@
 use lazy_static::lazy_static;
+use rand::Rng;
 use reqwest::{header::HeaderValue, Body, Client, Method, Request, Response, StatusCode, Url};
 use serde::{
     de::{SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize,
 };
 use thiserror::Error;
-use rand::Rng;
 
 #[derive(Serialize)]
 struct EmbeddingRequest<'a> {
@@ -29,11 +29,11 @@ pub type Embedding = [f32; EMBEDDING_LENGTH];
 pub type EmbeddingBytes = [u8; EMBEDDING_BYTE_LENGTH];
 
 pub fn empty_embedding() -> Embedding {
-    [0.0;EMBEDDING_LENGTH]
+    [0.0; EMBEDDING_LENGTH]
 }
 
-pub fn random_embedding<R:Rng>(rng:&mut R) -> Embedding {
-    let mut embedding = [0.0;EMBEDDING_LENGTH];
+pub fn random_embedding<R: Rng>(rng: &mut R) -> Embedding {
+    let mut embedding = [0.0; EMBEDDING_LENGTH];
     rng.fill(&mut embedding[..]);
 
     embedding
