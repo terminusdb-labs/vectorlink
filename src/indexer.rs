@@ -61,7 +61,12 @@ impl Metric<Point> for OpenAI {
     fn distance(&self, p1: &Point, p2: &Point) -> u32 {
         let a = p1.vec();
         let b = p2.vec();
-        let f = a.iter().zip(b.iter()).map(|(&a, &b)| (a - b)).sum::<f32>();
+        let f = a
+            .iter()
+            .zip(b.iter())
+            .map(|(&a, &b)| (a - b).powi(2))
+            .sum::<f32>()
+            .sqrt();
         (1.0 - f).to_bits()
     }
 }
