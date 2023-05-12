@@ -67,7 +67,7 @@ impl Metric<Point> for OpenAI {
             .map(|(&a, &b)| (a - b).powi(2))
             .sum::<f32>()
             .sqrt();
-        (1.0 - f).to_bits()
+        f.to_bits()
     }
 }
 
