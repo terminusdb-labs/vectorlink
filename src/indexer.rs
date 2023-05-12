@@ -13,7 +13,7 @@ use std::{
     iter::{self, zip},
     path::PathBuf,
 };
-use urlencoding::encode;
+use urlencoding::{decode, encode};
 
 pub type HnswIndex = Hnsw<OpenAI, Point, Lcg128Xsl64, 12, 24>;
 pub type HnswStorageIndex = Hnsw<OpenAI, IndexPoint, Lcg128Xsl64, 12, 24>;
@@ -224,15 +224,27 @@ pub fn serialize_index(mut path: PathBuf, name: &str, hnsw: HnswIndex) -> io::Re
     Ok(())
 }
 
+pub fn create_index_name(domain: &str, commit: &str) -> String {
+    let domain = encode(domain);
+    format!("{}@{}", domain, commit)
+}
+
+pub fn parse_index_name(name: &str) -> (String, String) {
+    let (domain, commit) = name.split_once('@').unwrap();
+    let domain = decode(domain).unwrap();
+    (domain.to_string(), commit.to_string())
+}
+
 pub fn deserialize_index(
     path: &mut PathBuf,
     name: &str,
     vector_store: &VectorStore,
 ) -> io::Result<HnswIndex> {
     path.push(format!("{name}.hnsw"));
+    let (domain, _) = parse_index_name(name);
     let read_file = File::options().read(true).open(&path)?;
     let hnsw: HnswStorageIndex = serde_json::from_reader(read_file).unwrap();
-    let domain = vector_store.get_domain(name)?;
+    let domain = vector_store.get_domain(&domain)?;
     let hnsw = hnsw.transform_features(|t| Point::Stored {
         id: t.id,
         vec: vector_store.get_vec(&domain, t.index).unwrap().unwrap(),

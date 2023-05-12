@@ -30,6 +30,8 @@ use tokio::{io::AsyncBufReadExt, sync::RwLock};
 use tokio_stream::{wrappers::LinesStream, Stream};
 use tokio_util::io::StreamReader;
 
+use crate::indexer::create_index_name;
+use crate::indexer::deserialize_index;
 use crate::indexer::operations_to_point_operations;
 use crate::indexer::search;
 use crate::indexer::serialize_index;
@@ -198,15 +200,6 @@ async fn get_operations_from_terminusdb(
     Ok(fp)
 }
 
-fn create_index_name(domain: &str, commit: &str) -> String {
-    format!("{}_{}", domain, commit)
-}
-
-fn parse_index_name(name: &str) -> (String, String) {
-    let (s, t) = name.split_once("_").unwrap();
-    (s.to_string(), t.to_string())
-}
-
 impl Service {
     async fn get_task_status(&self, task_id: &str) -> Option<TaskStatus> {
         self.tasks.read().await.get(task_id).cloned()
@@ -217,7 +210,16 @@ impl Service {
     }
 
     async fn get_index(&self, index_id: &str) -> Option<Arc<HnswIndex>> {
-        self.indexes.read().await.get(index_id).cloned()
+        if let Some(hnsw) = self.indexes.read().await.get(index_id) {
+            Some(hnsw).cloned()
+        } else {
+            let mut path = self.path.clone();
+            dbg!(index_id);
+            match deserialize_index(&mut path, index_id, &self.vector_store) {
+                Ok(res) => Some(res.into()),
+                Err(_) => None,
+            }
+        }
     }
 
     async fn set_index(&self, index_id: String, hnsw: Arc<HnswIndex>) {
