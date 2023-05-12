@@ -1,4 +1,8 @@
 use clap::{Parser, Subcommand};
+use indexer::Point;
+use space::Metric;
+
+use crate::indexer::OpenAI;
 
 mod indexer;
 mod openai;
@@ -28,6 +32,14 @@ enum Commands {
         #[arg(short, long)]
         string: String,
     },
+    Compare {
+        #[arg(short, long)]
+        key: String,
+        #[arg(short, long)]
+        s1: String,
+        #[arg(short, long)]
+        s2: String,
+    }
 }
 
 #[tokio::main]
@@ -42,6 +54,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Commands::Embed { key, string } => {
             let v = openai::embeddings_for(&key, &[string]).await?;
             eprintln!("{:?}", v);
+        },
+        Commands::Compare { key, s1, s2 } => {
+            let v = openai::embeddings_for(&key, &[s1, s2]).await?;
+            let p1 = Point::Mem { vec: Box::new(v[0]) };
+            let p2 = Point::Mem { vec: Box::new(v[1]) };
+            println!("distance: {}", OpenAI.distance(&p1, &p2));
         }
     }
 
