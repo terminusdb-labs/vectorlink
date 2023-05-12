@@ -79,7 +79,7 @@ pub enum PointOperation {
     Delete { id: String },
 }
 
-const API_KEY: &str = "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";
+pub const OPENAI_API_KEY: &str = "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";
 
 enum Op {
     Insert,
@@ -101,7 +101,7 @@ pub async fn operations_to_point_operations(
         })
         .collect();
     let strings: Vec<String> = tuples.iter().map(|(_, s, _)| s.to_string()).collect();
-    let vecs: Vec<Embedding> = embeddings_for(API_KEY, &strings).await.unwrap();
+    let vecs: Vec<Embedding> = embeddings_for(OPENAI_API_KEY, &strings).await.unwrap();
     let domain = vector_store.get_domain(domain).unwrap();
     let loaded_vecs = vector_store
         .add_and_load_vecs(&domain, vecs.iter())
@@ -162,20 +162,30 @@ pub fn start_indexing_from_operations(
 }
 
 #[derive(Debug)]
-enum SearchError {
+pub enum SearchError {
     SearchFailed,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct PointQuery {
+pub struct PointQuery {
     point: Point,
     distance: u32,
 }
 
-fn search(
+impl PointQuery {
+    pub fn id(&self) -> &String {
+        self.point.id()
+    }
+
+    pub fn distance(&self) -> u32 {
+        self.distance
+    }
+}
+
+pub fn search(
     p: &Point,
     num: usize,
-    hnsw: Hnsw<OpenAI, Point, Lcg128Xsl64, 12, 24>,
+    hnsw: &Hnsw<OpenAI, Point, Lcg128Xsl64, 12, 24>,
 ) -> Result<Vec<PointQuery>, SearchError> {
     let mut output: Vec<_> = iter::repeat(Neighbor {
         index: !0,
@@ -195,7 +205,7 @@ fn search(
     Ok(points)
 }
 
-pub fn serialize_index(path: &mut PathBuf, name: &str, hnsw: HnswIndex) -> io::Result<()> {
+pub fn serialize_index(mut path: PathBuf, name: &str, hnsw: HnswIndex) -> io::Result<()> {
     path.push(format!("{name}.hnsw"));
     let write_file = File::options().write(true).create(true).open(&path)?;
 
@@ -286,7 +296,7 @@ mod tests {
         let p = Point::Mem {
             vec: Box::new(candidate_vec),
         };
-        let points = search(&p, 4, hnsw).unwrap();
+        let points = search(&p, 4, &hnsw).unwrap();
         let p1 = &points[0];
         let p2 = &points[1];
         assert_eq!(*p1.point.vec(), *e1);

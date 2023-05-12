@@ -11,6 +11,7 @@ use rand::distributions::Alphanumeric;
 use rand::Rng;
 use regex::Regex;
 use reqwest::Url;
+use serde::Serialize;
 use serde::{self, Deserialize};
 use std::collections::HashSet;
 use std::{
@@ -30,8 +31,13 @@ use tokio_stream::{wrappers::LinesStream, Stream};
 use tokio_util::io::StreamReader;
 
 use crate::indexer::operations_to_point_operations;
+use crate::indexer::search;
+use crate::indexer::serialize_index;
+use crate::indexer::Point;
 use crate::indexer::PointOperation;
+use crate::indexer::OPENAI_API_KEY;
 use crate::indexer::{start_indexing_from_operations, HnswIndex, IndexIdentifier, OpenAI};
+use crate::openai::embeddings_for;
 use crate::vectors::VectorStore;
 
 #[derive(Deserialize, Debug)]
@@ -51,7 +57,11 @@ struct IndexRequest {
 }
 
 enum ResourceSpec {
-    Search,
+    Search {
+        domain: String,
+        commit_id: String,
+        count: usize,
+    },
     IndexRequest,
     StartIndex {
         domain: String,
@@ -68,6 +78,7 @@ enum SpecParseError {
     NoTaskId,
     NoDomain,
     NoTaskIdOrDomain,
+    NoCommitIdOrDomain,
 }
 
 fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
@@ -120,7 +131,32 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
         }
         Err(SpecParseError::NoTaskId)
     } else if RE_SEARCH.is_match(path) {
-        Ok(ResourceSpec::Search)
+        let uri_string = uri.to_string();
+        let request_url = Url::parse(&uri_string).unwrap();
+        let params = request_url.query_pairs();
+        let mut count = None;
+        let mut commit_id = None;
+        let mut domain = None;
+        for (key, value) in params {
+            if key == "count" {
+                count = Some(value.parse::<usize>().unwrap())
+            } else if key == "commit_id" {
+                commit_id = Some(value.to_string())
+            } else if key == "domain" {
+                domain = Some(value.to_string())
+            }
+        }
+        match (domain, commit_id) {
+            (Some(domain), Some(commit_id)) => {
+                let count = count.unwrap_or(10);
+                Ok(ResourceSpec::Search {
+                    domain,
+                    commit_id,
+                    count,
+                })
+            }
+            _ => Err(SpecParseError::NoCommitIdOrDomain),
+        }
     } else {
         Err(SpecParseError::UnknownPath)
     }
@@ -133,7 +169,14 @@ pub enum TaskStatus {
     Completed,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct QueryResult {
+    id: String,
+    distance: u32,
+}
+
 pub struct Service {
+    path: PathBuf,
     vector_store: VectorStore,
     pending: Mutex<HashSet<String>>,
     tasks: RwLock<HashMap<String, TaskStatus>>,
@@ -174,8 +217,13 @@ async fn get_operations_from_terminusdb(
     Ok(fp)
 }
 
-fn create_index_id(commit_id: &str, domain: &str) -> String {
-    format!("{}_{}", commit_id, domain)
+fn create_index_name(domain: &str, commit: &str) -> String {
+    format!("{}_{}", domain, commit)
+}
+
+fn parse_index_name(name: &str) -> (String, String) {
+    let (s, t) = name.split_once("_").unwrap();
+    (s.to_string(), t.to_string())
 }
 
 impl Service {
@@ -187,12 +235,12 @@ impl Service {
         self.tasks.write().await.insert(task_id, status);
     }
 
-    async fn get_index(&self, commit_id: &str) -> Option<Arc<HnswIndex>> {
-        self.indexes.read().await.get(commit_id).cloned()
+    async fn get_index(&self, index_id: &str) -> Option<Arc<HnswIndex>> {
+        self.indexes.read().await.get(index_id).cloned()
     }
 
-    async fn set_index(&self, commit_id: String, hnsw: Arc<HnswIndex>) {
-        self.indexes.write().await.insert(commit_id, hnsw);
+    async fn set_index(&self, index_id: String, hnsw: Arc<HnswIndex>) {
+        self.indexes.write().await.insert(index_id, hnsw);
     }
 
     async fn test_and_set_pending(&self, index_id: String) -> bool {
@@ -219,7 +267,9 @@ impl Service {
     }
 
     fn new<P: Into<PathBuf>>(path: P, num_bufs: usize) -> Self {
+        let path = path.into();
         Service {
+            path: path.clone(),
             vector_store: VectorStore::new(path, num_bufs),
             pending: Mutex::new(HashSet::new()),
             tasks: RwLock::new(HashMap::new()),
@@ -239,8 +289,7 @@ impl Service {
         if let Some(previous_id) = idxid.previous {
             //let commit_id = idxid.commit;
             let domain = idxid.domain;
-            let previous_id = create_index_id(&previous_id, &domain);
-            //let current_id = create_index_id(&commit_id, &domain);
+            let previous_id = create_index_name(&domain, &previous_id);
             let hnsw = self.get_index(&previous_id).await.unwrap();
             (*hnsw).clone()
         } else {
@@ -250,7 +299,7 @@ impl Service {
 
     fn start_indexing(self: Arc<Self>, domain: String, commit: String, previous: Option<String>) {
         tokio::spawn(async move {
-            let index_id = create_index_id(&domain, &commit);
+            let index_id = create_index_name(&domain, &commit);
             if self.test_and_set_pending(index_id.clone()).await {
                 let mut opstream = get_operations_from_terminusdb(
                     domain.clone(),
@@ -266,7 +315,7 @@ impl Service {
                         operations_to_point_operations(&domain, &self.vector_store, structs).await;
                     point_ops.append(&mut new_ops)
                 }
-                let id = create_index_id(&commit, &domain);
+                let id = create_index_name(&commit, &domain);
                 let hnsw = self
                     .load_hnsw_for_indexing(IndexIdentifier {
                         domain,
@@ -275,6 +324,8 @@ impl Service {
                     })
                     .await;
                 let hnsw = start_indexing_from_operations(hnsw, point_ops).unwrap();
+                let path = self.path.clone();
+                serialize_index(path, &index_id, hnsw.clone()).unwrap();
                 self.set_index(id, hnsw.into()).await;
                 self.clear_pending(&index_id).await;
             }
@@ -309,19 +360,32 @@ impl Service {
 
     async fn post(&self, req: Request<Body>) -> Result<Response<Body>, Infallible> {
         let uri = req.uri();
-        todo!()
-        /*
         match uri_to_spec(uri) {
-            Ok(ResourceSpec::Search) => {
-                let search: String = req.body().bytes()  to_text();
-                let search_strings = vec![search];
-                let vec: Vec<Embedding> = embedings_for(API_KEY, &search_strings);
-                todo!()
+            Ok(ResourceSpec::Search {
+                domain,
+                commit_id,
+                count,
+            }) => {
+                let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap();
+                let q = String::from_utf8(body_bytes.to_vec()).unwrap();
+                let vec = Box::new((embeddings_for(OPENAI_API_KEY, &[q]).await.unwrap())[0]);
+                let qp = Point::Mem { vec };
+                let index_id = create_index_name(&domain, &commit_id);
+                let hnsw = self.get_index(&index_id).await.unwrap();
+                let res = search(&qp, count, &hnsw).unwrap();
+                let ids: Vec<QueryResult> = res
+                    .iter()
+                    .map(|p| QueryResult {
+                        id: p.id().to_string(),
+                        distance: p.distance(),
+                    })
+                    .collect();
+                let s = serde_json::to_string(&ids).unwrap();
+                Ok(Response::builder().body(s.into()).unwrap())
             }
-            Ok(_) => panic!(),
-            Err(_) => panic!(),
-         }
-         */
+            Ok(_) => todo!(),
+            Err(_) => todo!(),
+        }
     }
 }
 
