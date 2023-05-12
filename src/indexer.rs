@@ -13,6 +13,7 @@ use std::{
     iter::{self, zip},
     path::PathBuf,
 };
+use urlencoding::encode;
 
 pub type HnswIndex = Hnsw<OpenAI, Point, Lcg128Xsl64, 12, 24>;
 pub type HnswStorageIndex = Hnsw<OpenAI, IndexPoint, Lcg128Xsl64, 12, 24>;
@@ -91,7 +92,7 @@ pub async fn operations_to_point_operations(
     vector_store: &VectorStore,
     structs: Vec<Result<Operation, std::io::Error>>,
 ) -> Vec<PointOperation> {
-    let ops: Vec<Operation> = structs.into_iter().map(|ro| ro.unwrap()).collect();
+    let ops: Vec<Operation> = structs.into_iter().map(|ro| dbg!(ro).unwrap()).collect();
     let tuples: Vec<(Op, String, String)> = ops
         .iter()
         .flat_map(|o| match o {
@@ -194,7 +195,7 @@ pub fn search(
     .take(num)
     .collect();
     let mut searcher = Searcher::default();
-    hnsw.nearest(p, 24, &mut searcher, &mut output);
+    hnsw.nearest(p, num, &mut searcher, &mut output);
     let mut points = Vec::with_capacity(num);
     for elt in output {
         points.push(PointQuery {
@@ -206,6 +207,7 @@ pub fn search(
 }
 
 pub fn serialize_index(mut path: PathBuf, name: &str, hnsw: HnswIndex) -> io::Result<()> {
+    let name = encode(name);
     path.push(format!("{name}.hnsw"));
     let write_file = File::options().write(true).create(true).open(&path)?;
 

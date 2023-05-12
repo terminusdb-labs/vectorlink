@@ -40,7 +40,7 @@ use crate::indexer::{start_indexing_from_operations, HnswIndex, IndexIdentifier,
 use crate::openai::embeddings_for;
 use crate::vectors::VectorStore;
 
-#[derive(Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug)]
 #[serde(tag = "op")]
 pub enum Operation {
     Inserted { string: String, id: String },
@@ -56,10 +56,11 @@ struct IndexRequest {
     operations: Vec<Operation>,
 }
 
+#[derive(Debug)]
 enum ResourceSpec {
     Search {
         domain: String,
-        commit_id: String,
+        commit: String,
         count: usize,
     },
     IndexRequest,
@@ -73,6 +74,7 @@ enum ResourceSpec {
     },
 }
 
+#[derive(Debug)]
 enum SpecParseError {
     UnknownPath,
     NoTaskId,
@@ -81,77 +83,57 @@ enum SpecParseError {
     NoCommitIdOrDomain,
 }
 
+fn query_map(uri: &Uri) -> HashMap<String, String> {
+    uri.query()
+        .map(|v| {
+            url::form_urlencoded::parse(v.as_bytes())
+                .into_owned()
+                .collect()
+        })
+        .unwrap_or_else(|| HashMap::with_capacity(0))
+}
+
 fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
     lazy_static! {
         static ref RE_INDEX: Regex = Regex::new(r"^/index(/?)$").unwrap();
-        static ref RE_START: Regex = Regex::new(r"^/start(/?)$").unwrap();
         static ref RE_CHECK: Regex = Regex::new(r"^/check(/?)$").unwrap();
         static ref RE_SEARCH: Regex = Regex::new(r"^/search(/?)$").unwrap();
     }
     let path = uri.path();
 
     if RE_INDEX.is_match(path) {
-        Ok(ResourceSpec::IndexRequest)
-    } else if RE_START.is_match(path) {
-        let uri_string = uri.to_string();
-        let request_url = Url::parse(&uri_string).unwrap();
-        let params = request_url.query_pairs();
-        let mut commit = None;
-        let mut domain = None;
-        let mut previous = None;
-        for (key, value) in params {
-            if key == "commit" {
-                commit = Some(value.to_string())
-            } else if key == "domain" {
-                domain = Some(value.to_string())
-            } else if key == "previous" {
-                previous = Some(value.to_string())
-            }
-        }
+        let query = dbg!(query_map(uri));
+        let commit = query.get("commit").map(|v| v.to_string());
+        let domain = query.get("domain").map(|v| v.to_string());
+        let previous = query.get("previous").map(|v| v.to_string());
         match (domain, commit) {
             (Some(domain), Some(commit)) => Ok(ResourceSpec::StartIndex {
                 domain,
                 commit,
                 previous,
             }),
-            (Some(_domain), None) => Err(SpecParseError::NoTaskId),
-            (None, Some(_commit)) => Err(SpecParseError::NoDomain),
-            (None, None) => Err(SpecParseError::NoTaskIdOrDomain),
+            _ => Err(SpecParseError::NoCommitIdOrDomain),
         }
     } else if RE_CHECK.is_match(path) {
-        let uri_string = uri.to_string();
-        let request_url = Url::parse(&uri_string).unwrap();
-        let params = request_url.query_pairs();
-        for (key, task_id) in params {
-            if key == "task_id" {
-                return Ok(ResourceSpec::CheckTask {
-                    task_id: task_id.to_string(),
-                });
-            }
+        let query = query_map(uri);
+        if let Some(task_id) = query.get("task_id") {
+            Ok(ResourceSpec::CheckTask {
+                task_id: task_id.to_string(),
+            })
+        } else {
+            Err(SpecParseError::NoTaskId)
         }
-        Err(SpecParseError::NoTaskId)
     } else if RE_SEARCH.is_match(path) {
-        let uri_string = uri.to_string();
-        let request_url = Url::parse(&uri_string).unwrap();
-        let params = request_url.query_pairs();
-        let mut count = None;
-        let mut commit_id = None;
-        let mut domain = None;
-        for (key, value) in params {
-            if key == "count" {
-                count = Some(value.parse::<usize>().unwrap())
-            } else if key == "commit_id" {
-                commit_id = Some(value.to_string())
-            } else if key == "domain" {
-                domain = Some(value.to_string())
-            }
-        }
-        match (domain, commit_id) {
-            (Some(domain), Some(commit_id)) => {
+        let query = query_map(uri);
+        let domain = query.get("domain").map(|v| v.to_string());
+        let commit = query.get("commit").map(|v| v.to_string());
+        let count = query.get("count").map(|v| v.parse::<usize>().unwrap());
+        match (domain, commit) {
+            (Some(domain), Some(commit)) => {
                 let count = count.unwrap_or(10);
                 Ok(ResourceSpec::Search {
                     domain,
-                    commit_id,
+                    commit,
                     count,
                 })
             }
@@ -195,13 +177,12 @@ async fn get_operations_from_terminusdb(
     commit: String,
     previous: Option<String>,
 ) -> Result<impl Stream<Item = io::Result<Operation>> + Unpin, io::Error> {
-    let mut params: Vec<_> = [("domain", domain), ("commit", commit)]
-        .into_iter()
-        .collect();
+    let mut params: Vec<_> = [("commit_id", commit)].into_iter().collect();
     if let Some(previous) = previous {
         params.push(("previous", previous))
     }
-    let url = reqwest::Url::parse_with_params(TERMINUSDB_INDEX_ENDPOINT, &params).unwrap();
+    let endpoint = format!("{}/{}", TERMINUSDB_INDEX_ENDPOINT, &domain);
+    let url = reqwest::Url::parse_with_params(&endpoint, &params).unwrap();
     let res = reqwest::get(url)
         .await
         .unwrap()
@@ -240,7 +221,7 @@ impl Service {
     }
 
     async fn set_index(&self, index_id: String, hnsw: Arc<HnswIndex>) {
-        self.indexes.write().await.insert(index_id, hnsw);
+        self.indexes.write().await.insert(dbg!(index_id), hnsw);
     }
 
     async fn test_and_set_pending(&self, index_id: String) -> bool {
@@ -287,7 +268,7 @@ impl Service {
 
     async fn load_hnsw_for_indexing(&self, idxid: IndexIdentifier) -> HnswIndex {
         if let Some(previous_id) = idxid.previous {
-            //let commit_id = idxid.commit;
+            //let commit = idxid.commit;
             let domain = idxid.domain;
             let previous_id = create_index_name(&domain, &previous_id);
             let hnsw = self.get_index(&previous_id).await.unwrap();
@@ -315,7 +296,7 @@ impl Service {
                         operations_to_point_operations(&domain, &self.vector_store, structs).await;
                     point_ops.append(&mut new_ops)
                 }
-                let id = create_index_name(&commit, &domain);
+                let id = create_index_name(&domain, &commit);
                 let hnsw = self
                     .load_hnsw_for_indexing(IndexIdentifier {
                         domain,
@@ -334,7 +315,7 @@ impl Service {
 
     async fn get(self: Arc<Self>, req: Request<Body>) -> Result<Response<Body>, Infallible> {
         let uri = req.uri();
-        match uri_to_spec(uri) {
+        match dbg!(uri_to_spec(uri)) {
             Ok(ResourceSpec::StartIndex {
                 domain,
                 commit,
@@ -363,14 +344,15 @@ impl Service {
         match uri_to_spec(uri) {
             Ok(ResourceSpec::Search {
                 domain,
-                commit_id,
+                commit,
                 count,
             }) => {
                 let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap();
                 let q = String::from_utf8(body_bytes.to_vec()).unwrap();
                 let vec = Box::new((embeddings_for(OPENAI_API_KEY, &[q]).await.unwrap())[0]);
                 let qp = Point::Mem { vec };
-                let index_id = create_index_name(&domain, &commit_id);
+                let index_id = create_index_name(&domain, &commit);
+                // if None, then return 404
                 let hnsw = self.get_index(&index_id).await.unwrap();
                 let res = search(&qp, count, &hnsw).unwrap();
                 let ids: Vec<QueryResult> = res

@@ -11,6 +11,7 @@ use std::sync::atomic::{self, AtomicUsize};
 use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 
 use lru::LruCache;
+use urlencoding::encode;
 
 use crate::openai::{Embedding, EmbeddingBytes, EMBEDDING_BYTE_LENGTH, EMBEDDING_LENGTH};
 
@@ -45,13 +46,14 @@ pub struct Domain {
 impl Domain {
     fn open(dir: &PathBuf, name: &str, index: usize) -> io::Result<Self> {
         let mut path = dir.clone();
+        let name = encode(name);
         path.push(format!("{name}.vecs"));
         let mut write_file = File::options()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
-            .open(&path)?;
+            .open(dbg!(&path))?;
         let pos = write_file.seek(SeekFrom::End(0))?;
         if pos as usize % EMBEDDING_BYTE_LENGTH != 0 {
             panic!("domain {name} has unexpected length");
