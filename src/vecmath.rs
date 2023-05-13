@@ -35,7 +35,7 @@ fn clamp_01(f: f32) -> f32 {
 }
 
 fn normalize_cosine_distance(f: f32) -> f32 {
-    clamp_01((1.0+f)/2.0)
+    clamp_01((f-1.0)/-2.0)
 }
 
 
@@ -105,7 +105,7 @@ macro_rules! simd_module {
                 let mut sum = <$t>::splat(0.);
                 for x in 0..left.len()/$lanes {
                     let l = <$t>::from_slice_aligned(&left[x*$lanes..(x+1)*$lanes]);
-                    let r = <$t>::from_slice_aligned(&left[x*$lanes..(x+1)*$lanes]);
+                    let r = <$t>::from_slice_aligned(&right[x*$lanes..(x+1)*$lanes]);
                     sum += l * r;
                 }
                 normalize_cosine_distance(sum.sum())
@@ -134,7 +134,7 @@ macro_rules! simd_module {
                 let mut sum = <$t>::splat(0.);
                 for x in 0..left.len()/$lanes {
                     let l = <$t>::from_slice_unaligned(&left[x*$lanes..(x+1)*$lanes]);
-                    let r = <$t>::from_slice_unaligned(&left[x*$lanes..(x+1)*$lanes]);
+                    let r = <$t>::from_slice_unaligned(&right[x*$lanes..(x+1)*$lanes]);
                     sum += l * r;
                 }
                 normalize_cosine_distance(sum.sum())
@@ -199,7 +199,7 @@ simd_module!(f32x16, 16);
 mod tests {
     use rand::{rngs::StdRng, SeedableRng};
 
-    use crate::vecmath::simd::normalize_vec_simd_unaligned;
+    use crate::vecmath::simd::{normalize_vec_simd_unaligned, normalized_cosine_distance_simd_unaligned};
 
     use super::*;
     #[test]
@@ -214,6 +214,15 @@ mod tests {
 
         normalize_vec_cpu(&mut e1);
         normalize_vec_simd_unaligned(&mut e2);
+
+        eprintln!("distance (cpu): {}", normalized_cosine_distance_cpu(&e1, &e2));
+        eprintln!("distance (simd): {}", normalized_cosine_distance_simd_unaligned(&e1, &e2));
+        eprintln!("distance (simd same): {}", normalized_cosine_distance_simd_unaligned(&e1, &e1));
+
+        let mut e3 = random_embedding(&mut rng);
+        normalize_vec_cpu(&mut e3);
+        eprintln!("distance (cpu): {}", normalized_cosine_distance_cpu(&e1, &e3));
+        eprintln!("distance (simd): {}", normalized_cosine_distance_simd_unaligned(&e1, &e3));
 
         assert_eq!(e1, e2);
     }
