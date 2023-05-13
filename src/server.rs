@@ -65,7 +65,6 @@ enum ResourceSpec {
         commit: String,
         count: usize,
     },
-    IndexRequest,
     StartIndex {
         domain: String,
         commit: String,
@@ -74,14 +73,18 @@ enum ResourceSpec {
     CheckTask {
         task_id: String,
     },
+    Similar {
+        domain: String,
+        commit: String,
+        id: String,
+        count: usize,
+    },
 }
 
 #[derive(Debug)]
 enum SpecParseError {
     UnknownPath,
     NoTaskId,
-    NoDomain,
-    NoTaskIdOrDomain,
     NoCommitIdOrDomain,
 }
 
@@ -100,6 +103,7 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
         static ref RE_INDEX: Regex = Regex::new(r"^/index(/?)$").unwrap();
         static ref RE_CHECK: Regex = Regex::new(r"^/check(/?)$").unwrap();
         static ref RE_SEARCH: Regex = Regex::new(r"^/search(/?)$").unwrap();
+        static ref RE_SIMILAR: Regex = Regex::new(r"^/similar(/?)$").unwrap();
     }
     let path = uri.path();
 
@@ -141,6 +145,24 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
             }
             _ => Err(SpecParseError::NoCommitIdOrDomain),
         }
+    } else if RE_SIMILAR.is_match(path) {
+        let query = query_map(uri);
+        let domain = query.get("domain").map(|v| v.to_string());
+        let commit = query.get("commit").map(|v| v.to_string());
+        let id = query.get("id").map(|v| v.to_string());
+        let count = query.get("count").map(|v| v.parse::<usize>().unwrap());
+        match (domain, commit, id) {
+            (Some(domain), Some(commit), Some(id)) => {
+                let count = count.unwrap_or(10);
+                Ok(ResourceSpec::Similar {
+                    domain,
+                    commit,
+                    id,
+                    count,
+                })
+            }
+            _ => Err(SpecParseError::NoCommitIdOrDomain),
+        }
     } else {
         Err(SpecParseError::UnknownPath)
     }
@@ -156,7 +178,7 @@ pub enum TaskStatus {
 #[derive(Clone, Debug, Serialize)]
 pub struct QueryResult {
     id: String,
-    distance: u32,
+    distance: f32,
 }
 
 pub struct Service {
@@ -336,6 +358,28 @@ impl Service {
                     Ok(Response::builder().body("Completed".into()).unwrap())
                 }
             }
+            Ok(ResourceSpec::Similar {
+                domain,
+                commit,
+                count,
+                id,
+            }) => {
+                let index_id = create_index_name(&domain, &commit);
+                // if None, then return 404
+                let hnsw = self.get_index(&index_id).await.unwrap();
+                let qp;
+                todo!();
+                let res = search(&qp, count, &hnsw).unwrap();
+                let ids: Vec<QueryResult> = res
+                    .iter()
+                    .map(|p| QueryResult {
+                        id: p.id().to_string(),
+                        distance: f32::from_bits(p.distance()),
+                    })
+                    .collect();
+                let s = serde_json::to_string(&ids).unwrap();
+                Ok(Response::builder().body(s.into()).unwrap())
+            }
             Ok(_) => todo!(),
             Err(_) => todo!(),
         }
@@ -361,7 +405,7 @@ impl Service {
                     .iter()
                     .map(|p| QueryResult {
                         id: p.id().to_string(),
-                        distance: p.distance(),
+                        distance: f32::from_bits(p.distance()),
                     })
                     .collect();
                 let s = serde_json::to_string(&ids).unwrap();

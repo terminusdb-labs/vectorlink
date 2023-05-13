@@ -24,7 +24,7 @@ enum Commands {
         directory: String,
         #[arg(short, long, default_value_t = 8080)]
         port: u16,
-        #[arg(short, long, default_value_t = 100)]
+        #[arg(short, long, default_value_t = 10000)]
         size: usize,
     },
     Embed {
@@ -41,7 +41,7 @@ enum Commands {
         #[arg(short, long)]
         s2: String,
     },
-    Test
+    Test,
 }
 
 #[tokio::main]
@@ -56,12 +56,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Commands::Embed { key, string } => {
             let v = openai::embeddings_for(&key, &[string]).await?;
             eprintln!("{:?}", v);
-        },
+        }
         Commands::Compare { key, s1, s2 } => {
             let v = openai::embeddings_for(&key, &[s1, s2]).await?;
-            let p1 = Point::Mem { vec: Box::new(v[0]) };
-            let p2 = Point::Mem { vec: Box::new(v[1]) };
-            println!("same? {}, distance: {}", p1 == p2, OpenAI.distance(&p1, &p2));
+            let p1 = Point::Mem {
+                vec: Box::new(v[0]),
+            };
+            let p2 = Point::Mem {
+                vec: Box::new(v[1]),
+            };
+            println!(
+                "same? {}, distance: {}",
+                p1 == p2,
+                OpenAI.distance(&p1, &p2)
+            );
         }
         Commands::Test => {
             eprintln!("{}", 1.0_f32.to_bits());
