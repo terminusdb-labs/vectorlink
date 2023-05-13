@@ -440,7 +440,7 @@ source = "git+https://github.com/terminusdb-labs/terminusdb-hnsw#fb2adcdf292be6d
 dependencies = [
  "ahash 0.7.6",
  "hashbrown 0.11.2",
- "libm",
+ "libm 0.2.6",
  "num-traits",
  "rand_core",
  "serde",
@@ -606,6 +606,12 @@ checksum = "2b00cc1c228a6782d0f076e7b232802e0c5689d41bb5df366f2a6b6621cfdfe1"
 
 [[package]]
 name = "libm"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fc7aa29613bd6a620df431842069224d8bc9011086b1db4c0e0cd47fa03ec9a"
+
+[[package]]
+name = "libm"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "348108ab3fba42ec82ff6e9564fc4ca0247bdccdc68dd8af9764bbc79c3c8ffb"
@@ -753,6 +759,16 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "packed_simd"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6cf965495ba3190af4c54375cb7d5d4777954457a215035a783f9aec5380b19f"
+dependencies = [
+ "cfg-if 1.0.0",
+ "libm 0.1.4",
 ]
 
 [[package]]
@@ -1164,6 +1180,7 @@ dependencies = [
  "hyper",
  "lazy_static",
  "lru",
+ "packed_simd",
  "rand",
  "rand_pcg",
  "regex",

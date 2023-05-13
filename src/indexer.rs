@@ -1,7 +1,7 @@
 use crate::{
-    openai::{embeddings_for, Embedding},
+    openai::{embeddings_for},
     server::Operation,
-    vectors::{LoadedVec, VectorStore},
+    vectors::{LoadedVec, VectorStore}, vecmath::Embedding,
 };
 use hnsw::{Hnsw, Searcher};
 use rand_pcg::Lcg128Xsl64;

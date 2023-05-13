@@ -13,7 +13,7 @@ use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 use lru::LruCache;
 use urlencoding::encode;
 
-use crate::openai::{Embedding, EmbeddingBytes, EMBEDDING_BYTE_LENGTH, EMBEDDING_LENGTH};
+use crate::vecmath::{EMBEDDING_LENGTH, EMBEDDING_BYTE_LENGTH, Embedding, EmbeddingBytes};
 
 // 3 memory pages of 4K hold 2 OpenAI vectors.
 // We set things up so that blocks are some multiple of 2 pages.
@@ -699,7 +699,7 @@ impl VectorStore {
 
 #[cfg(test)]
 mod tests {
-    use crate::openai::random_embedding;
+    use crate::vecmath::random_embedding;
 
     use super::*;
 

@@ -8,6 +8,7 @@ mod indexer;
 mod openai;
 mod server;
 mod vectors;
+mod vecmath;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
