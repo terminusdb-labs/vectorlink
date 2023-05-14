@@ -36,9 +36,17 @@ enum Commands {
     Compare {
         #[arg(short, long)]
         key: String,
-        #[arg(short, long)]
+        #[arg(long)]
         s1: String,
+        #[arg(long)]
+        s2: String,
+    },
+    Compare2 {
         #[arg(short, long)]
+        key: String,
+        #[arg(long)]
+        s1: String,
+        #[arg(long)]
         s2: String,
     },
     Test,
@@ -69,6 +77,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 "same? {}, distance: {}",
                 p1 == p2,
                 OpenAI.distance(&p1, &p2)
+            );
+        },
+        Commands::Compare2 { key, s1, s2 } => {
+            let v = openai::embeddings_for(&key, &[s1, s2]).await?;
+            let p1 = Box::new(v[0]);
+            let p2 = Box::new(v[1]);
+            println!(
+                "same? {}, distance: {}",
+                p1 == p2,
+                vecmath::normalized_cosine_distance(&p1, &p2)
             );
         }
         Commands::Test => {
