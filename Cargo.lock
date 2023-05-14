@@ -34,6 +34,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "aligned_box"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6c02eb4487576701e32cd97862dc83d81a0d437e71da9a225e9879957465487"
+
+[[package]]
 name = "anstream"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1173,6 +1179,7 @@ dependencies = [
 name = "terminusdb-semantic-indexer"
 version = "0.1.0"
 dependencies = [
+ "aligned_box",
  "bytes",
  "clap",
  "futures",

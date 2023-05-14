@@ -43,6 +43,16 @@ pub fn normalized_cosine_distance_cpu(left: &Embedding, right: &Embedding) -> f3
     normalize_cosine_distance(left.iter().zip(right.iter()).map(|(l,r)|l*r).sum::<f32>())
 }
 
+#[cfg(feature = "simd")]
+pub fn normalized_cosine_distance_simd(left: &Embedding, right: &Embedding) -> f32 {
+    simd::normalized_cosine_distance_simd(left, right)
+}
+
+#[cfg(not(feature = "simd"))]
+pub fn normalized_cosine_distance_simd(left: &Embedding, right: &Embedding) -> f32 {
+    unimplemented!("simd support is not enabled");
+}
+
 pub fn normalize_vec_cpu(vec: &mut Embedding) {
     let mut sum = 0.0;
     for f in vec.iter() {
@@ -78,9 +88,14 @@ pub fn normalize_vec(vec: &mut Embedding) {
 
 macro_rules! simd_module {
     ($t:ident, $lanes:literal) => {
-        mod simd {
+        pub mod simd {
             use packed_simd::$t;
+            use aligned_box::AlignedBox;
             use super::*;
+
+            pub fn aligned_box(e: Embedding) -> AlignedBox<Embedding> {
+                AlignedBox::new(std::mem::align_of::<$t>(), e).unwrap()
+            }
 
             pub fn normalized_cosine_distance_simd(left: &Embedding, right: &Embedding) -> f32 {
                 if left.as_ptr().align_offset(std::mem::align_of::<$t>()) == 0

@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use indexer::Point;
 use space::Metric;
 
@@ -48,8 +48,17 @@ enum Commands {
         s1: String,
         #[arg(long)]
         s2: String,
+        #[arg(short, long, value_enum, default_value_t=DistanceVariant::Default)]
+        variant: DistanceVariant
     },
     Test,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum DistanceVariant {
+    Default,
+    Simd,
+    Cpu
 }
 
 #[tokio::main]
@@ -79,14 +88,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 OpenAI.distance(&p1, &p2)
             );
         },
-        Commands::Compare2 { key, s1, s2 } => {
+        Commands::Compare2 { key, s1, s2, variant } => {
             let v = openai::embeddings_for(&key, &[s1, s2]).await?;
-            let p1 = Box::new(v[0]);
-            let p2 = Box::new(v[1]);
+            let p1 = &v[0];
+            let p2 = &v[1];
+            let distance = match variant {
+                DistanceVariant::Default => vecmath::normalized_cosine_distance(&p1, &p2),
+                DistanceVariant::Cpu => vecmath::normalized_cosine_distance_cpu(&p1, &p2),
+                DistanceVariant::Simd => vecmath::normalized_cosine_distance_simd(&p1, &p2),
+            };
             println!(
-                "same? {}, distance: {}",
-                p1 == p2,
-                vecmath::normalized_cosine_distance(&p1, &p2)
+                "distance: {}",
+                distance
             );
         }
         Commands::Test => {
