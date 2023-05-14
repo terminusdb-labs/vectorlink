@@ -59,7 +59,7 @@ pub fn normalize_vec_cpu(vec: &mut Embedding) {
         sum += f*f;
     }
     let magnitude = sum.sqrt();
-    eprintln!("cpu magnitude: {}", magnitude);
+    //eprintln!("cpu magnitude: {}", magnitude);
 
     for f in vec.iter_mut() {
         *f /= magnitude;
@@ -101,7 +101,7 @@ macro_rules! simd_module {
                 if left.as_ptr().align_offset(std::mem::align_of::<$t>()) == 0
                     && right.as_ptr().align_offset(std::mem::align_of::<$t>()) == 0
                 {
-                    normalized_cosine_distance_simd_aligned(left, right)
+                    unsafe { normalized_cosine_distance_simd_aligned_unchecked(left, right) }
                 } else {
                     normalized_cosine_distance_simd_unaligned(left, right)
                 }
@@ -109,43 +109,43 @@ macro_rules! simd_module {
 
             pub fn normalize_vec_simd(vec: &mut Embedding) {
                 if vec.as_ptr().align_offset(std::mem::align_of::<$t>()) == 0 {
-                    normalize_vec_simd_aligned(vec)
+                    unsafe { normalize_vec_simd_aligned_unchecked(vec) }
                 } else {
                     normalize_vec_simd_unaligned(vec)
                 }
             }
 
-            pub fn normalized_cosine_distance_simd_aligned(left: &Embedding, right: &Embedding) -> f32 {
-                eprintln!("using {} ({} lanes)", stringify!($t), $lanes);
+            pub unsafe fn normalized_cosine_distance_simd_aligned_unchecked(left: &Embedding, right: &Embedding) -> f32 {
+                //eprintln!("using {} ({} lanes)", stringify!($t), $lanes);
                 let mut sum = <$t>::splat(0.);
                 for x in 0..left.len()/$lanes {
-                    let l = <$t>::from_slice_aligned(&left[x*$lanes..(x+1)*$lanes]);
-                    let r = <$t>::from_slice_aligned(&right[x*$lanes..(x+1)*$lanes]);
+                    let l = <$t>::from_slice_aligned_unchecked(&left[x*$lanes..(x+1)*$lanes]);
+                    let r = <$t>::from_slice_aligned_unchecked(&right[x*$lanes..(x+1)*$lanes]);
                     sum += l * r;
                 }
                 normalize_cosine_distance(sum.sum())
             }
 
-            pub fn normalize_vec_simd_aligned(vec: &mut Embedding) {
-                eprintln!("using {} ({} lanes)", stringify!($t), $lanes);
+            pub unsafe fn normalize_vec_simd_aligned_unchecked(vec: &mut Embedding) {
+                //eprintln!("using {} ({} lanes)", stringify!($t), $lanes);
                 let mut sum = <$t>::splat(0.);
                 let exp = <$t>::splat(2.);
                 for x in 0..vec.len()/$lanes {
-                    let part = <$t>::from_slice_aligned(&vec[x*$lanes..(x+1)*$lanes]);
+                    let part = <$t>::from_slice_aligned_unchecked(&vec[x*$lanes..(x+1)*$lanes]);
                     sum += part*part;
                 }
                 let magnitude = sum.sum().sqrt();
-                eprintln!("simd magnitude: {}", magnitude);
+                //eprintln!("simd magnitude: {}", magnitude);
                 let magnitude = <$t>::splat(magnitude);
 
                 for x in 0..vec.len()/$lanes {
-                    let scaled = <$t>::from_slice_aligned(&vec[x*$lanes..(x+1)*$lanes]) / magnitude;
-                    scaled.write_to_slice_aligned(&mut vec[x*$lanes..(x+1)*$lanes]);
+                    let scaled = <$t>::from_slice_aligned_unchecked(&vec[x*$lanes..(x+1)*$lanes]) / magnitude;
+                    scaled.write_to_slice_aligned_unchecked(&mut vec[x*$lanes..(x+1)*$lanes]);
                 }
             }
 
             pub fn normalized_cosine_distance_simd_unaligned(left: &Embedding, right: &Embedding) -> f32 {
-                eprintln!("using {} ({} lanes, unaligned)", stringify!($t), $lanes);
+                //eprintln!("using {} ({} lanes, unaligned)", stringify!($t), $lanes);
                 let mut sum = <$t>::splat(0.);
                 for x in 0..left.len()/$lanes {
                     let l = <$t>::from_slice_unaligned(&left[x*$lanes..(x+1)*$lanes]);
@@ -156,7 +156,7 @@ macro_rules! simd_module {
             }
 
             pub fn normalize_vec_simd_unaligned(vec: &mut Embedding) {
-                eprintln!("using {} ({} lanes, unaligned)", stringify!($t), $lanes);
+                //eprintln!("using {} ({} lanes, unaligned)", stringify!($t), $lanes);
                 let mut sum = <$t>::splat(0.);
                 //let exp = <$t>::splat(2.);
                 for x in 0..vec.len()/$lanes {
@@ -164,7 +164,7 @@ macro_rules! simd_module {
                     sum += part*part;
                 }
                 let magnitude = sum.sum().sqrt();
-                eprintln!("simd magnitude: {}", magnitude);
+                //eprintln!("simd magnitude: {}", magnitude);
                 let magnitude = <$t>::splat(magnitude);
 
                 for x in 0..vec.len()/$lanes {
