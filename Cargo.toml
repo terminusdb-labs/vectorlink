@@ -29,6 +29,7 @@ url = "2.3.1"
 urlencoding = "2.1"
 packed_simd = {version = "0.3.8", optional=true}
 aligned_box = "0.2"
+tiktoken-rs = "0.4"
 
 [features]
 simd = ["packed_simd"]
