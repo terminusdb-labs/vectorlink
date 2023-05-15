@@ -86,129 +86,92 @@ pub fn normalize_vec(vec: &mut Embedding) {
     normalize_vec_cpu(vec)
 }
 
-macro_rules! simd_module {
-    ($t:ident, $lanes:literal) => {
-        pub mod simd {
-            use packed_simd::$t;
-            use aligned_box::AlignedBox;
-            use super::*;
+#[cfg(feature = "simd")]
+pub mod simd {
+    use packed_simd::f32x16;
+    use aligned_box::AlignedBox;
+    use super::*;
 
-            pub fn aligned_box(e: Embedding) -> AlignedBox<Embedding> {
-                AlignedBox::new(std::mem::align_of::<$t>(), e).unwrap()
-            }
+    pub fn aligned_box(e: Embedding) -> AlignedBox<Embedding> {
+        AlignedBox::new(std::mem::align_of::<f32x16>(), e).unwrap()
+    }
 
-            pub fn normalized_cosine_distance_simd(left: &Embedding, right: &Embedding) -> f32 {
-                if left.as_ptr().align_offset(std::mem::align_of::<$t>()) == 0
-                    && right.as_ptr().align_offset(std::mem::align_of::<$t>()) == 0
-                {
-                    unsafe { normalized_cosine_distance_simd_aligned_unchecked(left, right) }
-                } else {
-                    normalized_cosine_distance_simd_unaligned(left, right)
-                }
-            }
+    pub fn normalized_cosine_distance_simd(left: &Embedding, right: &Embedding) -> f32 {
+        if left.as_ptr().align_offset(std::mem::align_of::<f32x16>()) == 0
+            && right.as_ptr().align_offset(std::mem::align_of::<f32x16>()) == 0
+        {
+            unsafe { normalized_cosine_distance_simd_aligned_unchecked(left, right) }
+        } else {
+            normalized_cosine_distance_simd_unaligned(left, right)
+        }
+    }
 
-            pub fn normalize_vec_simd(vec: &mut Embedding) {
-                if vec.as_ptr().align_offset(std::mem::align_of::<$t>()) == 0 {
-                    unsafe { normalize_vec_simd_aligned_unchecked(vec) }
-                } else {
-                    normalize_vec_simd_unaligned(vec)
-                }
-            }
+    pub fn normalize_vec_simd(vec: &mut Embedding) {
+        if vec.as_ptr().align_offset(std::mem::align_of::<f32x16>()) == 0 {
+            unsafe { normalize_vec_simd_aligned_unchecked(vec) }
+        } else {
+            normalize_vec_simd_unaligned(vec)
+        }
+    }
 
-            pub unsafe fn normalized_cosine_distance_simd_aligned_unchecked(left: &Embedding, right: &Embedding) -> f32 {
-                //eprintln!("using {} ({} lanes)", stringify!($t), $lanes);
-                let mut sum = <$t>::splat(0.);
-                for x in 0..left.len()/$lanes {
-                    let l = <$t>::from_slice_aligned_unchecked(&left[x*$lanes..(x+1)*$lanes]);
-                    let r = <$t>::from_slice_aligned_unchecked(&right[x*$lanes..(x+1)*$lanes]);
-                    sum += l * r;
-                }
-                normalize_cosine_distance(sum.sum())
-            }
+    pub unsafe fn normalized_cosine_distance_simd_aligned_unchecked(left: &Embedding, right: &Embedding) -> f32 {
+        //eprintln!("using {} ({} lanes)", stringify!(f32x16), 16);
+        let mut sum = <f32x16>::splat(0.);
+        for x in 0..left.len()/16 {
+            let l = <f32x16>::from_slice_aligned_unchecked(&left[x*16..(x+1)*16]);
+            let r = <f32x16>::from_slice_aligned_unchecked(&right[x*16..(x+1)*16]);
+            sum += l * r;
+        }
+        normalize_cosine_distance(sum.sum())
+    }
 
-            pub unsafe fn normalize_vec_simd_aligned_unchecked(vec: &mut Embedding) {
-                //eprintln!("using {} ({} lanes)", stringify!($t), $lanes);
-                let mut sum = <$t>::splat(0.);
-                let exp = <$t>::splat(2.);
-                for x in 0..vec.len()/$lanes {
-                    let part = <$t>::from_slice_aligned_unchecked(&vec[x*$lanes..(x+1)*$lanes]);
-                    sum += part*part;
-                }
-                let magnitude = sum.sum().sqrt();
-                //eprintln!("simd magnitude: {}", magnitude);
-                let magnitude = <$t>::splat(magnitude);
+    pub unsafe fn normalize_vec_simd_aligned_unchecked(vec: &mut Embedding) {
+        //eprintln!("using {} ({} lanes)", stringify!(f32x16), 16);
+        let mut sum = <f32x16>::splat(0.);
+        let exp = <f32x16>::splat(2.);
+        for x in 0..vec.len()/16 {
+            let part = <f32x16>::from_slice_aligned_unchecked(&vec[x*16..(x+1)*16]);
+            sum += part*part;
+        }
+        let magnitude = sum.sum().sqrt();
+        //eprintln!("simd magnitude: {}", magnitude);
+        let magnitude = <f32x16>::splat(magnitude);
 
-                for x in 0..vec.len()/$lanes {
-                    let scaled = <$t>::from_slice_aligned_unchecked(&vec[x*$lanes..(x+1)*$lanes]) / magnitude;
-                    scaled.write_to_slice_aligned_unchecked(&mut vec[x*$lanes..(x+1)*$lanes]);
-                }
-            }
+        for x in 0..vec.len()/16 {
+            let scaled = <f32x16>::from_slice_aligned_unchecked(&vec[x*16..(x+1)*16]) / magnitude;
+            scaled.write_to_slice_aligned_unchecked(&mut vec[x*16..(x+1)*16]);
+        }
+    }
 
-            pub fn normalized_cosine_distance_simd_unaligned(left: &Embedding, right: &Embedding) -> f32 {
-                //eprintln!("using {} ({} lanes, unaligned)", stringify!($t), $lanes);
-                let mut sum = <$t>::splat(0.);
-                for x in 0..left.len()/$lanes {
-                    let l = <$t>::from_slice_unaligned(&left[x*$lanes..(x+1)*$lanes]);
-                    let r = <$t>::from_slice_unaligned(&right[x*$lanes..(x+1)*$lanes]);
-                    sum += l * r;
-                }
-                normalize_cosine_distance(sum.sum())
-            }
+    pub fn normalized_cosine_distance_simd_unaligned(left: &Embedding, right: &Embedding) -> f32 {
+        //eprintln!("using {} ({} lanes, unaligned)", stringify!(f32x16), 16);
+        let mut sum = <f32x16>::splat(0.);
+        for x in 0..left.len()/16 {
+            let l = <f32x16>::from_slice_unaligned(&left[x*16..(x+1)*16]);
+            let r = <f32x16>::from_slice_unaligned(&right[x*16..(x+1)*16]);
+            sum += l * r;
+        }
+        normalize_cosine_distance(sum.sum())
+    }
 
-            pub fn normalize_vec_simd_unaligned(vec: &mut Embedding) {
-                //eprintln!("using {} ({} lanes, unaligned)", stringify!($t), $lanes);
-                let mut sum = <$t>::splat(0.);
-                //let exp = <$t>::splat(2.);
-                for x in 0..vec.len()/$lanes {
-                    let part = <$t>::from_slice_unaligned(&vec[x*$lanes..(x+1)*$lanes]);
-                    sum += part*part;
-                }
-                let magnitude = sum.sum().sqrt();
-                //eprintln!("simd magnitude: {}", magnitude);
-                let magnitude = <$t>::splat(magnitude);
+    pub fn normalize_vec_simd_unaligned(vec: &mut Embedding) {
+        //eprintln!("using {} ({} lanes, unaligned)", stringify!(f32x16), 16);
+        let mut sum = <f32x16>::splat(0.);
+        //let exp = <f32x16>::splat(2.);
+        for x in 0..vec.len()/16 {
+            let part = <f32x16>::from_slice_unaligned(&vec[x*16..(x+1)*16]);
+            sum += part*part;
+        }
+        let magnitude = sum.sum().sqrt();
+        //eprintln!("simd magnitude: {}", magnitude);
+        let magnitude = <f32x16>::splat(magnitude);
 
-                for x in 0..vec.len()/$lanes {
-                    let scaled = <$t>::from_slice_unaligned(&vec[x*$lanes..(x+1)*$lanes]) / magnitude;
-                    scaled.write_to_slice_unaligned(&mut vec[x*$lanes..(x+1)*$lanes]);
-                }
-            }
+        for x in 0..vec.len()/16 {
+            let scaled = <f32x16>::from_slice_unaligned(&vec[x*16..(x+1)*16]) / magnitude;
+            scaled.write_to_slice_unaligned(&mut vec[x*16..(x+1)*16]);
         }
     }
 }
-
-// Here, we define the same module 4 times for different lane widths,
-// depending on what cpu features are available to us. The algorithm
-// is pretty much the same (see above), except it operates on more
-// lanes at once.
-
-// we're basically gonna assume that at the minimum, we're gonna be
-// able to do 2 parallel f32 simd instructions. If either sse2 or neon
-// as cpu features are available, we can do more.
-#[cfg(all(feature = "simd",
-          not(any(target_feature = "sse2",
-                  target_feature = "neon"))))]
-simd_module!(f32x2, 2);
-
-// at most 4 lanes are available unless we're at least on avx (for
-// x86) or aarch64 with neon support (for arm)
-#[cfg(all(feature = "simd",
-          not(any(target_feature = "avx",
-                  target_cpu = "aarch64")),
-          any(target_feature = "sse2",
-              target_feature = "neon")))]
-simd_module!(f32x4, 4);
-
-// At most 8 lanes are available on aarch64 with neon support. x86
-// might have 16 lane support though for avx512
-#[cfg(all(feature = "simd",
-          not(target_feature = "avx512"),
-          any(target_feature = "avx",
-              all(target_cpu = "aarch64",
-                  target_feature = "neon"))))]
-simd_module!(f32x8, 8);
-
-#[cfg(all(feature = "simd", target_feature = "avx512"))]
-simd_module!(f32x16, 16);
 
 #[cfg(all(feature = "simd", test))]
 mod tests {
