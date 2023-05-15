@@ -8,8 +8,8 @@ use crate::indexer::OpenAI;
 mod indexer;
 mod openai;
 mod server;
-mod vectors;
 mod vecmath;
+mod vectors;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -50,7 +50,7 @@ enum Commands {
         #[arg(long)]
         s2: String,
         #[arg(short, long, value_enum, default_value_t=DistanceVariant::Default)]
-        variant: DistanceVariant
+        variant: DistanceVariant,
     },
     Test {
         #[arg(short, long)]
@@ -62,7 +62,7 @@ enum Commands {
 enum DistanceVariant {
     Default,
     Simd,
-    Cpu
+    Cpu,
 }
 
 #[tokio::main]
@@ -91,20 +91,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 p1 == p2,
                 OpenAI.distance(&p1, &p2)
             );
-        },
-        Commands::Compare2 { key, s1, s2, variant } => {
+        }
+        Commands::Compare2 {
+            key,
+            s1,
+            s2,
+            variant,
+        } => {
             let v = openai::embeddings_for(&key, &[s1, s2]).await?;
             let p1 = &v[0];
             let p2 = &v[1];
             let distance = match variant {
-                DistanceVariant::Default => vecmath::normalized_cosine_distance(&p1, &p2),
-                DistanceVariant::Cpu => vecmath::normalized_cosine_distance_cpu(&p1, &p2),
-                DistanceVariant::Simd => vecmath::normalized_cosine_distance_simd(&p1, &p2),
+                DistanceVariant::Default => vecmath::normalized_cosine_distance(p1, p2),
+                DistanceVariant::Cpu => vecmath::normalized_cosine_distance_cpu(p1, p2),
+                DistanceVariant::Simd => vecmath::normalized_cosine_distance_simd(p1, p2),
             };
-            println!(
-                "distance: {}",
-                distance
-            );
+            println!("distance: {}", distance);
         }
         Commands::Test {key } => {
             let v = openai::embeddings_for(&key, &["king".to_string(), "man".to_string(), "woman".to_string(), "queen".to_string()]).await?;

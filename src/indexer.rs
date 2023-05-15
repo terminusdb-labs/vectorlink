@@ -1,7 +1,8 @@
 use crate::{
-    openai::{embeddings_for},
+    openai::embeddings_for,
     server::Operation,
-    vectors::{LoadedVec, VectorStore}, vecmath::Embedding,
+    vecmath::Embedding,
+    vectors::{LoadedVec, VectorStore},
 };
 use hnsw::{Hnsw, Searcher};
 use rand_pcg::Lcg128Xsl64;
@@ -97,7 +98,7 @@ pub async fn operations_to_point_operations(
     vector_store: &VectorStore,
     structs: Vec<Result<Operation, std::io::Error>>,
 ) -> Vec<PointOperation> {
-    let ops: Vec<Operation> = structs.into_iter().map(|ro| dbg!(ro).unwrap()).collect();
+    let ops: Vec<Operation> = structs.into_iter().map(|ro| ro.unwrap()).collect();
     let tuples: Vec<(Op, String, String)> = ops
         .iter()
         .flat_map(|o| match o {
