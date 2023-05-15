@@ -1,7 +1,7 @@
 use crate::{
     openai::embeddings_for,
     server::Operation,
-    vecmath::Embedding,
+    vecmath::{self, Embedding},
     vectors::{LoadedVec, VectorStore},
 };
 use hnsw::{Hnsw, Searcher};
@@ -62,19 +62,14 @@ impl Metric<Point> for OpenAI {
     fn distance(&self, p1: &Point, p2: &Point) -> u32 {
         let a = p1.vec();
         let b = p2.vec();
-        let f = a
-            .iter()
-            .zip(b.iter())
-            .map(|(&a, &b)| (a - b).powi(2))
-            .sum::<f32>()
-            .sqrt();
+        let f = vecmath::normalized_cosine_distance(a, b);
         f.to_bits()
     }
 }
 
 impl Metric<IndexPoint> for OpenAI {
     type Unit = u32;
-    fn distance(&self, p1: &IndexPoint, p2: &IndexPoint) -> u32 {
+    fn distance(&self, _p1: &IndexPoint, _p2: &IndexPoint) -> u32 {
         unimplemented!()
     }
 }
@@ -86,8 +81,6 @@ pub enum PointOperation {
     Delete { id: String },
 }
 
-pub const OPENAI_API_KEY: &str = "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";
-
 enum Op {
     Insert,
     Changed,
@@ -97,6 +90,7 @@ pub async fn operations_to_point_operations(
     domain: &str,
     vector_store: &VectorStore,
     structs: Vec<Result<Operation, std::io::Error>>,
+    key: &str,
 ) -> Vec<PointOperation> {
     let ops: Vec<Operation> = structs.into_iter().map(|ro| ro.unwrap()).collect();
     let tuples: Vec<(Op, String, String)> = ops
@@ -108,7 +102,7 @@ pub async fn operations_to_point_operations(
         })
         .collect();
     let strings: Vec<String> = tuples.iter().map(|(_, s, _)| s.to_string()).collect();
-    let vecs: Vec<Embedding> = embeddings_for(OPENAI_API_KEY, &strings).await.unwrap();
+    let vecs: Vec<Embedding> = embeddings_for(key, &strings).await.unwrap();
     let domain = vector_store.get_domain(domain).unwrap();
     let loaded_vecs = vector_store
         .add_and_load_vecs(&domain, vecs.iter())
@@ -213,7 +207,7 @@ pub fn search(
 }
 
 pub fn serialize_index(mut path: PathBuf, name: &str, hnsw: HnswIndex) -> io::Result<()> {
-    let name = encode(name);
+    //let name = encode(name);
     path.push(format!("{name}.hnsw"));
     let write_file = File::options().write(true).create(true).open(&path)?;
 

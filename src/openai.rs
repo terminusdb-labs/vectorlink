@@ -87,8 +87,9 @@ pub enum EmbeddingError {
 }
 
 lazy_static! {
-    static ref ENCODER: CoreBPE  = cl100k_base().unwrap();
+    static ref ENCODER: CoreBPE = cl100k_base().unwrap();
 }
+
 fn tokens_for(s: &str) -> Vec<usize> {
     ENCODER.encode_with_special_tokens(s)
 }
@@ -100,7 +101,6 @@ fn truncated_tokens_for(s: &str) -> Vec<usize> {
         tokens.truncate(MAX_TOKEN_COUNT);
         let decoded = ENCODER.decode(tokens.clone()).unwrap();
         eprintln!("truncating to {decoded}");
-
     }
 
     tokens
@@ -115,7 +115,7 @@ pub async fn embeddings_for(
         static ref CLIENT: Client = Client::new();
     }
 
-    let token_lists: Vec<_> = strings.iter().map(|s|truncated_tokens_for(s)).collect();
+    let token_lists: Vec<_> = strings.iter().map(|s| truncated_tokens_for(s)).collect();
 
     let mut req = Request::new(Method::POST, ENDPOINT.clone());
     let headers = req.headers_mut();
