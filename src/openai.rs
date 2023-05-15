@@ -86,10 +86,10 @@ pub enum EmbeddingError {
     BadJson(#[from] serde_json::Error),
 }
 
+lazy_static! {
+    static ref ENCODER: CoreBPE  = cl100k_base().unwrap();
+}
 fn tokens_for(s: &str) -> Vec<usize> {
-    lazy_static! {
-        static ref ENCODER: CoreBPE  = cl100k_base().unwrap();
-    }
     ENCODER.encode_with_special_tokens(s)
 }
 
@@ -97,8 +97,10 @@ const MAX_TOKEN_COUNT: usize = 8191;
 fn truncated_tokens_for(s: &str) -> Vec<usize> {
     let mut tokens = tokens_for(s);
     if tokens.len() > MAX_TOKEN_COUNT {
-        eprintln!("truncating {s}");
         tokens.truncate(MAX_TOKEN_COUNT);
+        let decoded = ENCODER.decode(tokens.clone()).unwrap();
+        eprintln!("truncating to {decoded}");
+
     }
 
     tokens
