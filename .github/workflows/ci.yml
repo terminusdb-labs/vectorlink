@@ -1,0 +1,31 @@
+# Build the crate, run the tests, and check the code format.
+name: Build and test
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  clippy_and_format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: actions-rs/clippy-check@v1
+        continue-on-error: true
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-features
+      - run: cargo fmt -- --check
+
+  build_and_test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: cargo test
+    - name: Build Docker image
+      run: docker build -t terminusdb-semantic-indexer .
