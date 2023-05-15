@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use indexer::Point;
 use space::Metric;
+use terminusdb_semantic_indexer::vecmath::empty_embedding;
 
 use crate::indexer::OpenAI;
 
@@ -51,7 +52,10 @@ enum Commands {
         #[arg(short, long, value_enum, default_value_t=DistanceVariant::Default)]
         variant: DistanceVariant
     },
-    Test,
+    Test {
+        #[arg(short, long)]
+        key: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -102,8 +106,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 distance
             );
         }
-        Commands::Test => {
-            eprintln!("{}", 1.0_f32.to_bits());
+        Commands::Test {key } => {
+            let v = openai::embeddings_for(&key, &["king".to_string(), "man".to_string(), "woman".to_string(), "queen".to_string()]).await?;
+            let mut calculated = empty_embedding();
+            for i in 0..calculated.len() {
+                calculated[i] = v[0][i] - v[1][i] + v[2][i];
+            }
+            let distance = vecmath::normalized_cosine_distance(&v[3], &calculated);
+            eprintln!("{}", distance);
         }
     }
 
