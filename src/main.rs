@@ -4,6 +4,7 @@ use std::path::Path;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use hnsw::Hnsw;
+use indexer::serialize_index;
 use indexer::start_indexing_from_operations;
 use indexer::Point;
 use indexer::{operations_to_point_operations, OpenAI};
@@ -47,7 +48,7 @@ enum Commands {
         key: String,
         #[arg(short, long)]
         commit: String,
-        #[arg(short, long)]
+        #[arg(long)]
         domain: String,
         #[arg(short, long)]
         directory: String,
@@ -118,7 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             println!(
                 "same? {}, distance: {}",
                 p1 == p2,
-                OpenAI.distance(&p1, &p2)
+                f32::from_bits(OpenAI.distance(&p1, &p2))
             );
         }
         Commands::Compare2 {
@@ -168,12 +169,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let mut hnsw: HnswIndex = Hnsw::new(OpenAI);
             let store = VectorStore::new(dirpath, size);
 
-            let f = File::options().read(true).create(true).open(path)?;
+            let f = File::options().read(true).open(path)?;
 
             let lines = io::BufReader::new(f).lines();
-
             let opstream = &lines
                 .map(|l| {
+                    dbg!(&l);
                     let ro: io::Result<Operation> = serde_json::from_str(&l.unwrap())
                         .map_err(|e| std::io::Error::new(ErrorKind::Other, e));
                     ro
@@ -186,6 +187,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     operations_to_point_operations(&domain.clone(), &store, structs, &key).await;
                 hnsw = start_indexing_from_operations(hnsw, new_ops).unwrap();
             }
+            let index_id = create_index_name(&domain, &commit);
+            serialize_index(dirpath.to_path_buf(), &index_id, hnsw.clone()).unwrap();
         }
     }
 

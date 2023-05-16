@@ -16,8 +16,8 @@ use std::{
 };
 use urlencoding::{decode, encode};
 
-pub type HnswIndex = Hnsw<OpenAI, Point, Lcg128Xsl64, 12, 24>;
-pub type HnswStorageIndex = Hnsw<OpenAI, IndexPoint, Lcg128Xsl64, 12, 24>;
+pub type HnswIndex = Hnsw<OpenAI, Point, Lcg128Xsl64, 24, 48>;
+pub type HnswStorageIndex = Hnsw<OpenAI, IndexPoint, Lcg128Xsl64, 24, 48>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Point {
@@ -183,11 +183,7 @@ impl PointQuery {
     }
 }
 
-pub fn search(
-    p: &Point,
-    num: usize,
-    hnsw: &Hnsw<OpenAI, Point, Lcg128Xsl64, 12, 24>,
-) -> Result<Vec<PointQuery>, SearchError> {
+pub fn search(p: &Point, num: usize, hnsw: &HnswIndex) -> Result<Vec<PointQuery>, SearchError> {
     let mut output: Vec<_> = iter::repeat(Neighbor {
         index: !0,
         distance: !0,

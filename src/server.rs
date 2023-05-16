@@ -333,7 +333,7 @@ impl Service {
         commit: String,
         previous: Option<String>,
         index_id: &str,
-    ) -> (String, Hnsw<OpenAI, Point, rand_pcg::Lcg128Xsl64, 12, 24>) {
+    ) -> (String, HnswIndex) {
         let id = create_index_name(&domain, &commit);
         let mut hnsw = self
             .load_hnsw_for_indexing(IndexIdentifier {
