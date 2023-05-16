@@ -15,7 +15,7 @@ use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 use lru::LruCache;
 use urlencoding::encode;
 
-use crate::vecmath::{EMBEDDING_LENGTH, EMBEDDING_BYTE_LENGTH, Embedding, EmbeddingBytes};
+use crate::vecmath::{Embedding, EmbeddingBytes, EMBEDDING_BYTE_LENGTH, EMBEDDING_LENGTH};
 
 // 3 memory pages of 4K hold 2 OpenAI vectors.
 // We set things up so that blocks are some multiple of 2 pages.
