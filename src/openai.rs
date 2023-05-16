@@ -1,6 +1,6 @@
+#![allow(unused, dead_code)]
 use lazy_static::lazy_static;
-use rand::Rng;
-use reqwest::{header::HeaderValue, Body, Client, Method, Request, Response, StatusCode, Url};
+use reqwest::{header::HeaderValue, Body, Client, Method, Request, StatusCode, Url};
 use serde::{
     de::{SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize,

@@ -1,3 +1,4 @@
+#![allow(unused)]
 use rand::Rng;
 
 pub const EMBEDDING_LENGTH: usize = 1536;

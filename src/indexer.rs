@@ -1,3 +1,4 @@
+#![allow(unused, dead_code)]
 use crate::{
     openai::embeddings_for,
     server::Operation,
@@ -8,7 +9,7 @@ use hnsw::{Hnsw, Searcher};
 use rand_pcg::Lcg128Xsl64;
 use serde::{Deserialize, Serialize};
 use space::{Metric, Neighbor};
-use std::{fs::File, sync::Arc};
+use std::fs::File;
 use std::{
     io,
     iter::{self, zip},

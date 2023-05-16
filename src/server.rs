@@ -1,3 +1,4 @@
+#![allow(unused, dead_code)]
 use bytes::Bytes;
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -10,7 +11,6 @@ use lazy_static::lazy_static;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use regex::Regex;
-use reqwest::Url;
 use serde::Serialize;
 use serde::{self, Deserialize};
 use std::collections::HashSet;

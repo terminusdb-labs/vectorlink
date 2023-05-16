@@ -1,4 +1,3 @@
-use std::future;
 use std::io::ErrorKind;
 use std::path::Path;
 

@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -516,7 +518,7 @@ impl Deref for LoadedVec {
 
 impl PartialEq for LoadedVec {
     fn eq(&self, other: &Self) -> bool {
-        *self == *other
+        **self == **other
     }
 }
 
