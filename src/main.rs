@@ -173,7 +173,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let lines = io::BufReader::new(f).lines();
             let opstream = &lines
                 .map(|l| {
-                    dbg!(&l);
                     let ro: io::Result<Operation> = serde_json::from_str(&l.unwrap())
                         .map_err(|e| std::io::Error::new(ErrorKind::Other, e));
                     ro

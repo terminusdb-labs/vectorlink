@@ -303,7 +303,13 @@ impl Service {
         }
     }
 
-    fn start_indexing(self: Arc<Self>, domain: String, commit: String, previous: Option<String>) {
+    fn start_indexing(
+        self: Arc<Self>,
+        domain: String,
+        commit: String,
+        previous: Option<String>,
+        task_id: String,
+    ) {
         tokio::spawn(async move {
             let index_id = create_index_name(&domain, &commit);
             if self.test_and_set_pending(index_id.clone()).await {
@@ -321,6 +327,7 @@ impl Service {
                 self.set_index(id, hnsw.into()).await;
                 self.clear_pending(&index_id).await;
             }
+            self.set_task_status(task_id, TaskStatus::Completed)
         });
     }
 
@@ -366,7 +373,8 @@ impl Service {
                 previous,
             }) => {
                 let task_id = Service::generate_task();
-                self.start_indexing(domain, commit, previous);
+                self.set_task_status(task_id.clone(), TaskStatus::Pending);
+                self.start_indexing(domain, commit, previous, task_id.clone());
                 Ok(Response::builder().body(task_id.into()).unwrap())
             }
             Ok(ResourceSpec::CheckTask { task_id }) => {
