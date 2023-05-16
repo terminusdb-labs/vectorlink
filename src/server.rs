@@ -236,7 +236,6 @@ impl Service {
             Some(hnsw).cloned()
         } else {
             let mut path = self.path.clone();
-            dbg!(index_id);
             match deserialize_index(&mut path, index_id, &self.vector_store) {
                 Ok(res) => Some(res.into()),
                 Err(_) => None,
@@ -245,7 +244,7 @@ impl Service {
     }
 
     async fn set_index(&self, index_id: String, hnsw: Arc<HnswIndex>) {
-        self.indexes.write().await.insert(dbg!(index_id), hnsw);
+        self.indexes.write().await.insert(index_id, hnsw);
     }
 
     async fn test_and_set_pending(&self, index_id: String) -> bool {
@@ -327,7 +326,7 @@ impl Service {
                 self.set_index(id, hnsw.into()).await;
                 self.clear_pending(&index_id).await;
             }
-            self.set_task_status(task_id, TaskStatus::Completed)
+            self.set_task_status(task_id, TaskStatus::Completed).await;
         });
     }
 
@@ -373,7 +372,8 @@ impl Service {
                 previous,
             }) => {
                 let task_id = Service::generate_task();
-                self.set_task_status(task_id.clone(), TaskStatus::Pending);
+                self.set_task_status(task_id.clone(), TaskStatus::Pending)
+                    .await;
                 self.start_indexing(domain, commit, previous, task_id.clone());
                 Ok(Response::builder().body(task_id.into()).unwrap())
             }
@@ -383,7 +383,9 @@ impl Service {
                         .body(format!("{:?}", state).into())
                         .unwrap())
                 } else {
-                    Ok(Response::builder().body("Completed".into()).unwrap())
+                    Ok(Response::builder()
+                        .body(format!("{:?}", TaskStatus::Completed).into())
+                        .unwrap())
                 }
             }
             Ok(ResourceSpec::Similar {
