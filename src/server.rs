@@ -239,7 +239,6 @@ async fn get_operations_from_terminusdb(
     let lines = StreamReader::new(res).lines();
     let lines_stream = LinesStream::new(lines);
     let fp = lines_stream.and_then(|l| {
-        dbg!(&l);
         future::ready(
             serde_json::from_str(&l).map_err(|e| std::io::Error::new(ErrorKind::Other, e)),
         )
