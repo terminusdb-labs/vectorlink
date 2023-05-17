@@ -192,7 +192,8 @@ pub fn search(p: &Point, num: usize, hnsw: &HnswIndex) -> Result<Vec<PointQuery>
     .take(num)
     .collect();
     let mut searcher = Searcher::default();
-    hnsw.nearest(p, num, &mut searcher, &mut output);
+    let ef = num.max(100);
+    hnsw.nearest(p, ef, &mut searcher, &mut output);
     let mut points = Vec::with_capacity(num);
     for elt in output {
         points.push(PointQuery {
