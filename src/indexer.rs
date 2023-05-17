@@ -33,7 +33,7 @@ pub struct IndexPoint {
 }
 
 impl Point {
-    fn id(&self) -> &String {
+    pub fn id(&self) -> &str {
         match self {
             Point::Stored { id, vec } => id,
             Point::Mem { vec } => panic!("You can not get the external id of a memory point"),
@@ -100,10 +100,18 @@ pub async fn operations_to_point_operations(
             Operation::Inserted { string, id } => Some((Op::Insert, string.into(), id.into())),
             Operation::Changed { string, id } => Some((Op::Changed, string.into(), id.into())),
             Operation::Deleted { id: _ } => None,
+            Operation::Error { message } => {
+                eprintln!("{}", message);
+                None
+            }
         })
         .collect();
     let strings: Vec<String> = tuples.iter().map(|(_, s, _)| s.to_string()).collect();
-    let vecs: Vec<Embedding> = embeddings_for(key, &strings).await.unwrap();
+    let vecs: Vec<Embedding> = if strings.is_empty() {
+        Vec::new()
+    } else {
+        embeddings_for(key, &strings).await.unwrap()
+    };
     let domain = vector_store.get_domain(domain).unwrap();
     let loaded_vecs = vector_store
         .add_and_load_vecs(&domain, vecs.iter())
@@ -170,12 +178,17 @@ pub enum SearchError {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PointQuery {
+    id: usize,
     point: Point,
     distance: u32,
 }
 
 impl PointQuery {
-    pub fn id(&self) -> &String {
+    pub fn internal_id(&self) -> usize {
+        self.id
+    }
+
+    pub fn id(&self) -> &str {
         self.point.id()
     }
 
@@ -192,10 +205,12 @@ pub fn search(p: &Point, num: usize, hnsw: &HnswIndex) -> Result<Vec<PointQuery>
     .take(num)
     .collect();
     let mut searcher = Searcher::default();
-    hnsw.nearest(p, num, &mut searcher, &mut output);
+    let ef = num.max(100);
+    hnsw.nearest(p, ef, &mut searcher, &mut output);
     let mut points = Vec::with_capacity(num);
     for elt in output {
         points.push(PointQuery {
+            id: elt.index,
             point: hnsw.feature(elt.index).clone(),
             distance: elt.distance,
         })

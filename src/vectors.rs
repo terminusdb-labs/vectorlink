@@ -255,11 +255,7 @@ impl PageArena {
         }
     }
 
-    fn finish_loading(
-        self: &Arc<Self>,
-        spec: PageSpec,
-        page: Box<VectorPage>,
-    ) -> Arc<PageHandle> {
+    fn finish_loading(self: &Arc<Self>, spec: PageSpec, page: Box<VectorPage>) -> Arc<PageHandle> {
         let index = spec.index;
         let handle = Arc::new(PageHandle {
             spec,

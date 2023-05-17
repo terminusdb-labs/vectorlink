@@ -3,6 +3,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use hnsw::Hnsw;
+use hyper::StatusCode;
 use hyper::{
     service::{make_service_fn, service_fn},
     Body, Method, Request, Response, Server, Uri,
@@ -47,6 +48,7 @@ pub enum Operation {
     Inserted { string: String, id: String },
     Changed { string: String, id: String },
     Deleted { id: String },
+    Error { message: String },
 }
 
 #[derive(Deserialize, Debug)]
@@ -78,6 +80,11 @@ enum ResourceSpec {
         id: String,
         count: usize,
     },
+    DuplicateCandidates {
+        domain: String,
+        commit: String,
+        threshold: f32,
+    },
 }
 
 #[derive(Debug)]
@@ -103,6 +110,7 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
         static ref RE_CHECK: Regex = Regex::new(r"^/check(/?)$").unwrap();
         static ref RE_SEARCH: Regex = Regex::new(r"^/search(/?)$").unwrap();
         static ref RE_SIMILAR: Regex = Regex::new(r"^/similar(/?)$").unwrap();
+        static ref RE_DUPLICATES: Regex = Regex::new(r"^/duplicates(/?)$").unwrap();
     }
     let path = uri.path();
 
@@ -158,6 +166,22 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
                     commit,
                     id,
                     count,
+                })
+            }
+            _ => Err(SpecParseError::NoCommitIdOrDomain),
+        }
+    } else if RE_DUPLICATES.is_match(path) {
+        let query = query_map(uri);
+        let domain = query.get("domain").map(|v| v.to_string());
+        let commit = query.get("commit").map(|v| v.to_string());
+        let threshold = query.get("threshold").map(|v| v.parse::<f32>().unwrap());
+        match (domain, commit) {
+            (Some(domain), Some(commit)) => {
+                let threshold = threshold.unwrap_or(0.0);
+                Ok(ResourceSpec::DuplicateCandidates {
+                    domain,
+                    commit,
+                    threshold,
                 })
             }
             _ => Err(SpecParseError::NoCommitIdOrDomain),
@@ -220,6 +244,12 @@ async fn get_operations_from_terminusdb(
         )
     });
     Ok(fp)
+}
+
+fn add_to_duplicates(duplicates: &mut HashMap<usize, usize>, id1: usize, id2: usize) {
+    if id1 < id2 {
+        duplicates.insert(id1, id2);
+    }
 }
 
 impl Service {
@@ -388,6 +418,33 @@ impl Service {
                         .unwrap())
                 }
             }
+            Ok(ResourceSpec::DuplicateCandidates {
+                domain,
+                commit,
+                threshold,
+            }) => {
+                let index_id = create_index_name(&domain, &commit);
+                // if None, then return 404
+                let hnsw = self.get_index(&index_id).await.unwrap();
+                let mut duplicates: HashMap<usize, usize> = HashMap::new();
+                let elts = hnsw.layer_len(0);
+                for i in 0..elts {
+                    let current_point = &hnsw.feature(i);
+                    let results = search(current_point, 2, &hnsw).unwrap();
+                    for result in results.iter() {
+                        if f32::from_bits(result.distance()) < threshold {
+                            add_to_duplicates(&mut duplicates, i, result.internal_id())
+                        }
+                    }
+                }
+                let mut v: Vec<(&str, &str)> = duplicates
+                    .into_iter()
+                    .map(|(i, j)| (hnsw.feature(i).id(), hnsw.feature(j).id()))
+                    .collect();
+                Ok(Response::builder()
+                    .body(serde_json::to_string(&v).unwrap().into())
+                    .unwrap())
+            }
             Ok(ResourceSpec::Similar {
                 domain,
                 commit,
@@ -397,18 +454,31 @@ impl Service {
                 let index_id = create_index_name(&domain, &commit);
                 // if None, then return 404
                 let hnsw = self.get_index(&index_id).await.unwrap();
-                let qp;
-                todo!();
-                let res = search(&qp, count, &hnsw).unwrap();
-                let ids: Vec<QueryResult> = res
-                    .iter()
-                    .map(|p| QueryResult {
-                        id: p.id().to_string(),
-                        distance: f32::from_bits(p.distance()),
-                    })
-                    .collect();
-                let s = serde_json::to_string(&ids).unwrap();
-                Ok(Response::builder().body(s.into()).unwrap())
+                let elts = hnsw.layer_len(0);
+                let mut qp = None;
+                for i in 0..elts {
+                    if *hnsw.feature(i).id() == id {
+                        qp = Some(hnsw.feature(i))
+                    }
+                }
+                match qp {
+                    Some(qp) => {
+                        let res = search(qp, count, &hnsw).unwrap();
+                        let ids: Vec<QueryResult> = res
+                            .iter()
+                            .map(|p| QueryResult {
+                                id: p.id().to_string(),
+                                distance: f32::from_bits(p.distance()),
+                            })
+                            .collect();
+                        let s = serde_json::to_string(&ids).unwrap();
+                        Ok(Response::builder().body(s.into()).unwrap())
+                    }
+                    None => Ok(Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body("id not found".into())
+                        .unwrap()),
+                }
             }
             Ok(_) => todo!(),
             Err(_) => todo!(),
