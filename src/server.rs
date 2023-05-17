@@ -3,6 +3,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use hnsw::Hnsw;
+use hyper::StatusCode;
 use hyper::{
     service::{make_service_fn, service_fn},
     Body, Method, Request, Response, Server, Uri,
@@ -397,18 +398,31 @@ impl Service {
                 let index_id = create_index_name(&domain, &commit);
                 // if None, then return 404
                 let hnsw = self.get_index(&index_id).await.unwrap();
-                let qp;
-                todo!();
-                let res = search(&qp, count, &hnsw).unwrap();
-                let ids: Vec<QueryResult> = res
-                    .iter()
-                    .map(|p| QueryResult {
-                        id: p.id().to_string(),
-                        distance: f32::from_bits(p.distance()),
-                    })
-                    .collect();
-                let s = serde_json::to_string(&ids).unwrap();
-                Ok(Response::builder().body(s.into()).unwrap())
+                let elts = hnsw.layer_len(0);
+                let mut qp = None;
+                for i in 0..elts {
+                    if *hnsw.feature(i).id() == id {
+                        qp = Some(hnsw.feature(i))
+                    }
+                }
+                match qp {
+                    Some(qp) => {
+                        let res = search(qp, count, &hnsw).unwrap();
+                        let ids: Vec<QueryResult> = res
+                            .iter()
+                            .map(|p| QueryResult {
+                                id: p.id().to_string(),
+                                distance: f32::from_bits(p.distance()),
+                            })
+                            .collect();
+                        let s = serde_json::to_string(&ids).unwrap();
+                        Ok(Response::builder().body(s.into()).unwrap())
+                    }
+                    None => Ok(Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body("id not found".into())
+                        .unwrap()),
+                }
             }
             Ok(_) => todo!(),
             Err(_) => todo!(),

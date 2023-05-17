@@ -33,7 +33,7 @@ pub struct IndexPoint {
 }
 
 impl Point {
-    fn id(&self) -> &String {
+    pub fn id(&self) -> &String {
         match self {
             Point::Stored { id, vec } => id,
             Point::Mem { vec } => panic!("You can not get the external id of a memory point"),
