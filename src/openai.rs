@@ -1,18 +1,19 @@
+#![allow(unused, dead_code)]
 use lazy_static::lazy_static;
-use rand::Rng;
-use reqwest::{header::HeaderValue, Body, Client, Method, Request, Response, StatusCode, Url};
+use reqwest::{header::HeaderValue, Body, Client, Method, Request, StatusCode, Url};
 use serde::{
     de::{SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize,
 };
 use thiserror::Error;
+use tiktoken_rs::{cl100k_base, CoreBPE};
 
 use crate::vecmath::Embedding;
 
 #[derive(Serialize)]
 struct EmbeddingRequest<'a> {
     model: &'a str,
-    input: &'a [String],
+    input: &'a [Vec<usize>],
     #[serde(skip_serializing_if = "Option::is_none")]
     user: Option<&'a str>,
 }
@@ -85,6 +86,26 @@ pub enum EmbeddingError {
     BadJson(#[from] serde_json::Error),
 }
 
+lazy_static! {
+    static ref ENCODER: CoreBPE = cl100k_base().unwrap();
+}
+
+fn tokens_for(s: &str) -> Vec<usize> {
+    ENCODER.encode_with_special_tokens(s)
+}
+
+const MAX_TOKEN_COUNT: usize = 8191;
+fn truncated_tokens_for(s: &str) -> Vec<usize> {
+    let mut tokens = tokens_for(s);
+    if tokens.len() > MAX_TOKEN_COUNT {
+        tokens.truncate(MAX_TOKEN_COUNT);
+        let decoded = ENCODER.decode(tokens.clone()).unwrap();
+        eprintln!("truncating to {decoded}");
+    }
+
+    tokens
+}
+
 pub async fn embeddings_for(
     api_key: &str,
     strings: &[String],
@@ -93,6 +114,8 @@ pub async fn embeddings_for(
         static ref ENDPOINT: Url = Url::parse("https://api.openai.com/v1/embeddings").unwrap();
         static ref CLIENT: Client = Client::new();
     }
+
+    let token_lists: Vec<_> = strings.iter().map(|s| truncated_tokens_for(s)).collect();
 
     let mut req = Request::new(Method::POST, ENDPOINT.clone());
     let headers = req.headers_mut();
@@ -104,7 +127,7 @@ pub async fn embeddings_for(
 
     let body = EmbeddingRequest {
         model: "text-embedding-ada-002",
-        input: strings,
+        input: &token_lists,
         user: None,
     };
     let body_vec = serde_json::to_vec(&body).unwrap();

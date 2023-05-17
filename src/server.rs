@@ -1,3 +1,4 @@
+#![allow(unused, dead_code)]
 use bytes::Bytes;
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -10,7 +11,6 @@ use lazy_static::lazy_static;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use regex::Regex;
-use reqwest::Url;
 use serde::Serialize;
 use serde::{self, Deserialize};
 use std::collections::HashSet;
@@ -37,7 +37,6 @@ use crate::indexer::search;
 use crate::indexer::serialize_index;
 use crate::indexer::Point;
 use crate::indexer::PointOperation;
-use crate::indexer::OPENAI_API_KEY;
 use crate::indexer::{start_indexing_from_operations, HnswIndex, IndexIdentifier, OpenAI};
 use crate::openai::embeddings_for;
 use crate::vectors::VectorStore;
@@ -182,6 +181,7 @@ pub struct QueryResult {
 }
 
 pub struct Service {
+    api_key: String,
     path: PathBuf,
     vector_store: VectorStore,
     pending: Mutex<HashSet<String>>,
@@ -236,7 +236,6 @@ impl Service {
             Some(hnsw).cloned()
         } else {
             let mut path = self.path.clone();
-            dbg!(index_id);
             match deserialize_index(&mut path, index_id, &self.vector_store) {
                 Ok(res) => Some(res.into()),
                 Err(_) => None,
@@ -245,7 +244,7 @@ impl Service {
     }
 
     async fn set_index(&self, index_id: String, hnsw: Arc<HnswIndex>) {
-        self.indexes.write().await.insert(dbg!(index_id), hnsw);
+        self.indexes.write().await.insert(index_id, hnsw);
     }
 
     async fn test_and_set_pending(&self, index_id: String) -> bool {
@@ -271,9 +270,10 @@ impl Service {
         s
     }
 
-    fn new<P: Into<PathBuf>>(path: P, num_bufs: usize) -> Self {
+    fn new<P: Into<PathBuf>>(path: P, num_bufs: usize, key: String) -> Self {
         let path = path.into();
         Service {
+            api_key: key,
             path: path.clone(),
             vector_store: VectorStore::new(path, num_bufs),
             pending: Mutex::new(HashSet::new()),
@@ -302,11 +302,17 @@ impl Service {
         }
     }
 
-    fn start_indexing(self: Arc<Self>, domain: String, commit: String, previous: Option<String>) {
+    fn start_indexing(
+        self: Arc<Self>,
+        domain: String,
+        commit: String,
+        previous: Option<String>,
+        task_id: String,
+    ) {
         tokio::spawn(async move {
             let index_id = create_index_name(&domain, &commit);
             if self.test_and_set_pending(index_id.clone()).await {
-                let mut opstream = get_operations_from_terminusdb(
+                let opstream = get_operations_from_terminusdb(
                     domain.clone(),
                     commit.clone(),
                     previous.clone(),
@@ -314,27 +320,47 @@ impl Service {
                 .await
                 .unwrap()
                 .chunks(100);
-                let mut point_ops: Vec<PointOperation> = Vec::new();
-                while let Some(structs) = opstream.next().await {
-                    let mut new_ops =
-                        operations_to_point_operations(&domain, &self.vector_store, structs).await;
-                    point_ops.append(&mut new_ops)
-                }
-                let id = create_index_name(&domain, &commit);
-                let hnsw = self
-                    .load_hnsw_for_indexing(IndexIdentifier {
-                        domain,
-                        commit,
-                        previous,
-                    })
+                let (id, hnsw) = self
+                    .process_operation_chunks(opstream, domain, commit, previous, &index_id)
                     .await;
-                let hnsw = start_indexing_from_operations(hnsw, point_ops).unwrap();
-                let path = self.path.clone();
-                serialize_index(path, &index_id, hnsw.clone()).unwrap();
                 self.set_index(id, hnsw.into()).await;
                 self.clear_pending(&index_id).await;
             }
+            self.set_task_status(task_id, TaskStatus::Completed).await;
         });
+    }
+
+    async fn process_operation_chunks(
+        self: &Arc<Self>,
+        mut opstream: futures::stream::Chunks<
+            impl Stream<Item = Result<Operation, io::Error>> + Unpin,
+        >,
+        domain: String,
+        commit: String,
+        previous: Option<String>,
+        index_id: &str,
+    ) -> (String, HnswIndex) {
+        let id = create_index_name(&domain, &commit);
+        let mut hnsw = self
+            .load_hnsw_for_indexing(IndexIdentifier {
+                domain: domain.clone(),
+                commit,
+                previous,
+            })
+            .await;
+        while let Some(structs) = opstream.next().await {
+            let new_ops = operations_to_point_operations(
+                &domain.clone(),
+                &self.vector_store,
+                structs,
+                &self.api_key,
+            )
+            .await;
+            hnsw = start_indexing_from_operations(hnsw, new_ops).unwrap();
+        }
+        let path = self.path.clone();
+        serialize_index(path, index_id, hnsw.clone()).unwrap();
+        (id, hnsw)
     }
 
     async fn get(self: Arc<Self>, req: Request<Body>) -> Result<Response<Body>, Infallible> {
@@ -346,7 +372,9 @@ impl Service {
                 previous,
             }) => {
                 let task_id = Service::generate_task();
-                self.start_indexing(domain, commit, previous);
+                self.set_task_status(task_id.clone(), TaskStatus::Pending)
+                    .await;
+                self.start_indexing(domain, commit, previous, task_id.clone());
                 Ok(Response::builder().body(task_id.into()).unwrap())
             }
             Ok(ResourceSpec::CheckTask { task_id }) => {
@@ -355,7 +383,9 @@ impl Service {
                         .body(format!("{:?}", state).into())
                         .unwrap())
                 } else {
-                    Ok(Response::builder().body("Completed".into()).unwrap())
+                    Ok(Response::builder()
+                        .body(format!("{:?}", TaskStatus::Completed).into())
+                        .unwrap())
                 }
             }
             Ok(ResourceSpec::Similar {
@@ -395,7 +425,7 @@ impl Service {
             }) => {
                 let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap();
                 let q = String::from_utf8(body_bytes.to_vec()).unwrap();
-                let vec = Box::new((embeddings_for(OPENAI_API_KEY, &[q]).await.unwrap())[0]);
+                let vec = Box::new((embeddings_for(&self.api_key, &[q]).await.unwrap())[0]);
                 let qp = Point::Mem { vec };
                 let index_id = create_index_name(&domain, &commit);
                 // if None, then return 404
@@ -421,9 +451,10 @@ pub async fn serve<P: Into<PathBuf>>(
     directory: P,
     port: u16,
     num_bufs: usize,
+    key: String,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
-    let service = Arc::new(Service::new(directory, num_bufs));
+    let service = Arc::new(Service::new(directory, num_bufs, key));
     let make_svc = make_service_fn(move |_conn| {
         let s = service.clone();
         async {

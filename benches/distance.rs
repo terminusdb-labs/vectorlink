@@ -17,9 +17,9 @@ fn bench_cpu_distance(b: &mut Bencher) {
 
 #[cfg(feature = "simd")]
 mod simd_benches {
-    use terminusdb_semantic_indexer::vecmath::*;
-    use terminusdb_semantic_indexer::vecmath::simd::*;
     use rand::{rngs::StdRng, SeedableRng};
+    use terminusdb_semantic_indexer::vecmath::simd::*;
+    use terminusdb_semantic_indexer::vecmath::*;
     use test::Bencher;
 
     #[bench]

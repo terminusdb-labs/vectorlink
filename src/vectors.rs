@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -6,14 +8,13 @@ use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::os::unix::prelude::FileExt;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::atomic::{self, AtomicUsize};
 use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 
 use lru::LruCache;
 use urlencoding::encode;
 
-use crate::vecmath::{EMBEDDING_LENGTH, EMBEDDING_BYTE_LENGTH, Embedding, EmbeddingBytes};
+use crate::vecmath::{Embedding, EmbeddingBytes, EMBEDDING_BYTE_LENGTH, EMBEDDING_LENGTH};
 
 // 3 memory pages of 4K hold 2 OpenAI vectors.
 // We set things up so that blocks are some multiple of 2 pages.
@@ -27,7 +28,7 @@ type VectorPageBytes = [u8; VECTOR_PAGE_BYTE_SIZE];
 
 struct LoadedVectorPage {
     index: usize,
-    page: Pin<Box<VectorPage>>,
+    page: Box<VectorPage>,
 }
 
 struct PinnedVectorPage {
@@ -150,7 +151,7 @@ struct PageSpec {
 }
 
 struct PageArena {
-    free: Mutex<Vec<Pin<Box<VectorPage>>>>,
+    free: Mutex<Vec<Box<VectorPage>>>,
     loading: Mutex<HashMap<PageSpec, Arc<(Condvar, Mutex<LoadState>)>>>,
     loaded: RwLock<HashMap<PageSpec, PinnedVectorPage>>,
     cache: RwLock<LruCache<PageSpec, LoadedVectorPage>>,
@@ -195,24 +196,24 @@ impl PageArena {
         }
         // TODO would be much better if we could have uninit allocs.
         let mut free = self.free.lock().unwrap();
-        let zeroed = Box::pin([0.0f32; VECTOR_PAGE_FLOAT_SIZE]);
+        let zeroed = Box::new([0.0f32; VECTOR_PAGE_FLOAT_SIZE]);
         for _ in 0..count - 1 {
             free.push(zeroed.clone());
         }
         free.push(zeroed);
     }
 
-    fn free_page_from_free(&self) -> Option<Pin<Box<VectorPage>>> {
+    fn free_page_from_free(&self) -> Option<Box<VectorPage>> {
         let mut free = self.free.lock().unwrap();
         free.pop()
     }
 
-    fn free_page_from_cache(&self) -> Option<Pin<Box<VectorPage>>> {
+    fn free_page_from_cache(&self) -> Option<Box<VectorPage>> {
         let mut cache = self.cache.write().unwrap();
         cache.pop_lru().map(|p| p.1.page)
     }
 
-    fn free_page(&self) -> Option<Pin<Box<VectorPage>>> {
+    fn free_page(&self) -> Option<Box<VectorPage>> {
         self.free_page_from_free()
             .or_else(|| self.free_page_from_cache())
     }
@@ -257,7 +258,7 @@ impl PageArena {
     fn finish_loading(
         self: &Arc<Self>,
         spec: PageSpec,
-        page: Pin<Box<VectorPage>>,
+        page: Box<VectorPage>,
     ) -> Arc<PageHandle> {
         let index = spec.index;
         let handle = Arc::new(PageHandle {
@@ -288,7 +289,7 @@ impl PageArena {
         handle
     }
 
-    fn cancel_loading(&self, spec: PageSpec, page: Pin<Box<VectorPage>>) {
+    fn cancel_loading(&self, spec: PageSpec, page: Box<VectorPage>) {
         let mut free = self.free.lock().unwrap();
         free.push(page);
         std::mem::drop(free);
@@ -516,7 +517,7 @@ impl Deref for LoadedVec {
 
 impl PartialEq for LoadedVec {
     fn eq(&self, other: &Self) -> bool {
-        *self == *other
+        **self == **other
     }
 }
 
