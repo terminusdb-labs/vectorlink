@@ -19,7 +19,8 @@ jobs:
         continue-on-error: true
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          args: --all-features
+          # we can't yet use all-features, as it depends on nightly
+          # args: --all-features
       - run: cargo fmt -- --check
 
   build_and_test:
