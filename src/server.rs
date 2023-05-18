@@ -227,6 +227,7 @@ pub struct QueryResult {
 }
 
 pub struct Service {
+    content_endpoint: Option<String>,
     api_key: String,
     path: PathBuf,
     vector_store: VectorStore,
@@ -235,14 +236,20 @@ pub struct Service {
     indexes: RwLock<HashMap<String, Arc<HnswIndex>>>,
 }
 
+#[derive(Debug, Error)]
+enum StartIndexError {
+    #[error("No content endpoint found: specify at server startup or supply indexing data from the command line")]
+    NoContentEndpoint,
+}
+
 async fn extract_body(req: Request<Body>) -> Bytes {
     hyper::body::to_bytes(req.into_body()).await.unwrap()
 }
 
 enum TerminusIndexOperationError {}
 
-const TERMINUSDB_INDEX_ENDPOINT: &str = "http://localhost:6363/api/index";
-async fn get_operations_from_terminusdb(
+async fn get_operations_from_content_endpoint(
+    content_endpoint: String,
     domain: String,
     commit: String,
     previous: Option<String>,
@@ -251,7 +258,7 @@ async fn get_operations_from_terminusdb(
     if let Some(previous) = previous {
         params.push(("previous", previous))
     }
-    let endpoint = format!("{}/{}", TERMINUSDB_INDEX_ENDPOINT, &domain);
+    let endpoint = format!("{}/{}", content_endpoint, &domain);
     let url = reqwest::Url::parse_with_params(&endpoint, &params).unwrap();
     let res = reqwest::get(url)
         .await
@@ -322,9 +329,15 @@ impl Service {
         s
     }
 
-    fn new<P: Into<PathBuf>>(path: P, num_bufs: usize, key: String) -> Self {
+    fn new<P: Into<PathBuf>>(
+        path: P,
+        num_bufs: usize,
+        key: String,
+        content_endpoint: Option<String>,
+    ) -> Self {
         let path = path.into();
         Service {
+            content_endpoint,
             api_key: key,
             path: path.clone(),
             vector_store: VectorStore::new(path, num_bufs),
@@ -360,26 +373,33 @@ impl Service {
         commit: String,
         previous: Option<String>,
         task_id: String,
-    ) {
-        tokio::spawn(async move {
-            let index_id = create_index_name(&domain, &commit);
-            if self.test_and_set_pending(index_id.clone()).await {
-                let opstream = get_operations_from_terminusdb(
-                    domain.clone(),
-                    commit.clone(),
-                    previous.clone(),
-                )
-                .await
-                .unwrap()
-                .chunks(100);
-                let (id, hnsw) = self
-                    .process_operation_chunks(opstream, domain, commit, previous, &index_id)
-                    .await;
-                self.set_index(id, hnsw.into()).await;
-                self.clear_pending(&index_id).await;
-            }
-            self.set_task_status(task_id, TaskStatus::Completed).await;
-        });
+    ) -> Result<(), StartIndexError> {
+        let content_endpoint = self.content_endpoint.clone();
+        if let Some(content_endpoint) = content_endpoint {
+            tokio::spawn(async move {
+                let index_id = create_index_name(&domain, &commit);
+                if self.test_and_set_pending(index_id.clone()).await {
+                    let opstream = get_operations_from_content_endpoint(
+                        content_endpoint.to_string(),
+                        domain.clone(),
+                        commit.clone(),
+                        previous.clone(),
+                    )
+                    .await
+                    .unwrap()
+                    .chunks(100);
+                    let (id, hnsw) = self
+                        .process_operation_chunks(opstream, domain, commit, previous, &index_id)
+                        .await;
+                    self.set_index(id, hnsw.into()).await;
+                    self.clear_pending(&index_id).await;
+                }
+                self.set_task_status(task_id, TaskStatus::Completed).await;
+            });
+            Ok(())
+        } else {
+            Err(StartIndexError::NoContentEndpoint)
+        }
     }
 
     async fn assign_index(
@@ -454,8 +474,13 @@ impl Service {
                 let task_id = Service::generate_task();
                 self.set_task_status(task_id.clone(), TaskStatus::Pending)
                     .await;
-                self.start_indexing(domain, commit, previous, task_id.clone());
-                Ok(Response::builder().body(task_id.into()).unwrap())
+                match self.start_indexing(domain, commit, previous, task_id.clone()) {
+                    Ok(()) => Ok(Response::builder().body(task_id.into()).unwrap()),
+                    Err(e) => Ok(Response::builder()
+                        .status(400)
+                        .body(e.to_string().into())
+                        .unwrap()),
+                }
             }
             Ok(ResourceSpec::AssignIndex {
                 domain,
@@ -598,9 +623,10 @@ pub async fn serve<P: Into<PathBuf>>(
     port: u16,
     num_bufs: usize,
     key: String,
+    content_endpoint: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
-    let service = Arc::new(Service::new(directory, num_bufs, key));
+    let service = Arc::new(Service::new(directory, num_bufs, key, content_endpoint));
     let make_svc = make_service_fn(move |_conn| {
         let s = service.clone();
         async {

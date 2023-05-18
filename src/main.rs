@@ -37,6 +37,8 @@ enum Commands {
         #[arg(short, long)]
         key: Option<String>,
         #[arg(short, long)]
+        content_endpoint: Option<String>,
+        #[arg(short, long)]
         directory: String,
         #[arg(short, long, default_value_t = 8080)]
         port: u16,
@@ -106,16 +108,30 @@ fn key_or_env(k: Option<String>) -> String {
     result.unwrap()
 }
 
+fn content_endpoint_or_env(c: Option<String>) -> Option<String> {
+    c.or_else(|| std::env::var("TERMINUSDB_CONTENT_ENDPOINT").ok())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Args::parse();
     match args.command {
         Commands::Serve {
             key,
+            content_endpoint,
             directory,
             port,
             size,
-        } => server::serve(directory, port, size, key_or_env(key)).await?,
+        } => {
+            server::serve(
+                directory,
+                port,
+                size,
+                key_or_env(key),
+                content_endpoint_or_env(content_endpoint),
+            )
+            .await?
+        }
         Commands::Embed { key, string } => {
             let v = openai::embeddings_for(&key_or_env(key), &[string]).await?;
             eprintln!("{:?}", v);
@@ -162,8 +178,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             )
             .await?;
             let mut calculated = empty_embedding();
-            for i in 0..calculated.len() {
-                calculated[i] = v[0][i] - v[1][i] + v[2][i];
+            for (i, calculated) in calculated.iter_mut().enumerate() {
+                *calculated = v[0][i] - v[1][i] + v[2][i];
             }
             let distance = vecmath::normalized_cosine_distance(&v[3], &calculated);
             eprintln!("{}", distance);
