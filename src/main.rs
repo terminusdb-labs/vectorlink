@@ -34,7 +34,7 @@ struct Args {
 enum Commands {
     Serve {
         #[arg(short, long)]
-        key: String,
+        key: Option<String>,
         #[arg(short, long)]
         directory: String,
         #[arg(short, long, default_value_t = 8080)]
@@ -44,7 +44,7 @@ enum Commands {
     },
     Load {
         #[arg(short, long)]
-        key: String,
+        key: Option<String>,
         #[arg(short, long)]
         commit: String,
         #[arg(long)]
@@ -58,13 +58,13 @@ enum Commands {
     },
     Embed {
         #[arg(short, long)]
-        key: String,
+        key: Option<String>,
         #[arg(short, long)]
         string: String,
     },
     Compare {
         #[arg(short, long)]
-        key: String,
+        key: Option<String>,
         #[arg(long)]
         s1: String,
         #[arg(long)]
@@ -72,7 +72,7 @@ enum Commands {
     },
     Compare2 {
         #[arg(short, long)]
-        key: String,
+        key: Option<String>,
         #[arg(long)]
         s1: String,
         #[arg(long)]
@@ -82,7 +82,7 @@ enum Commands {
     },
     Test {
         #[arg(short, long)]
-        key: String,
+        key: Option<String>,
     },
 }
 
@@ -91,6 +91,11 @@ enum DistanceVariant {
     Default,
     Simd,
     Scalar,
+}
+
+fn key_or_env(k: Option<String>) -> String {
+    k.or_else(|| std::env::var("OPENAI_KEY").ok())
+        .expect("No OpenAI key given")
 }
 
 #[tokio::main]
@@ -102,13 +107,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             directory,
             port,
             size,
-        } => server::serve(directory, port, size, key).await?,
+        } => server::serve(directory, port, size, key_or_env(key)).await?,
         Commands::Embed { key, string } => {
-            let v = openai::embeddings_for(&key, &[string]).await?;
+            let v = openai::embeddings_for(&key_or_env(key), &[string]).await?;
             eprintln!("{:?}", v);
         }
         Commands::Compare { key, s1, s2 } => {
-            let v = openai::embeddings_for(&key, &[s1, s2]).await?;
+            let v = openai::embeddings_for(&key_or_env(key), &[s1, s2]).await?;
             let p1 = Point::Mem {
                 vec: Box::new(v[0]),
             };
@@ -127,7 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             s2,
             variant,
         } => {
-            let v = openai::embeddings_for(&key, &[s1, s2]).await?;
+            let v = openai::embeddings_for(&key_or_env(key), &[s1, s2]).await?;
             let p1 = &v[0];
             let p2 = &v[1];
             let distance = match variant {
@@ -139,7 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
         Commands::Test { key } => {
             let v = openai::embeddings_for(
-                &key,
+                &key_or_env(key),
                 &[
                     "king".to_string(),
                     "man".to_string(),
@@ -179,6 +184,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 })
                 .chunks(100);
 
+            let key = key_or_env(key);
             for structs in opstream {
                 let structs: Vec<_> = structs.collect();
                 let new_ops =
