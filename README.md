@@ -1,4 +1,4 @@
-# Vemdex: TerminusDB Semantic Indexer
+# TerminusDB Semantic Indexer
 
 The TerminusDB Semantic Indexer is a vector database with an index
 based on Hierarchical Navigable Small World graphs written in rust. It
@@ -45,11 +45,11 @@ If you wan to index documents, you can any of these methods:
 
 * Run a TerminusDB installation and refer to real commits and databases
 * Put up an endpoint that will issue the appropriate operations for a
-commit id and a domain
-* use the `load` command
+commit id and a domain with the endpoint `ENDPOINT/domain?commit_id=COMMIT`
+* use the `load` command with a file
 
-In any case, the database expects a content which will have the form
-(in JSONlines format):
+In any of these cases, the indexer expects a content stream which will
+have the form (in JSONlines format):
 
 ```json
 {"id":"terminusdb:///star-wars/People/20", "op":"Inserted", "string":"The person's name is Yoda. They are described with the following synopsis: Yoda is a fictional character in the Star Wars franchise created by George Lucas, first appearing in the 1980 film The Empire Strikes Back. In the original films, he trains Luke Skywalker to fight against the Galactic Empire. In the prequel films, he serves as the Grand Master of the Jedi Order and as a high-ranking general of Clone Troopers in the Clone Wars. Following his death in Return of the Jedi at the age of 900, Yoda was the oldest living character in the Star Wars franchise in canon, until the introduction of Maz Kanata in Star Wars: The Force Awakens. Their gender is male. They have the following hair colours: white. They have a mass of 17. Their skin colours are green."}
@@ -101,5 +101,3 @@ advance these aims is welcome:
   structures to reduce memory overhead.
 
 And if you have new ideas we'd love to hear them!
-
-
