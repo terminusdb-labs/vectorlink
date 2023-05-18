@@ -26,6 +26,7 @@ use std::{
     future,
     io::{self, ErrorKind},
 };
+use thiserror::Error;
 use tokio::sync::Mutex;
 use tokio::{io::AsyncBufReadExt, sync::RwLock};
 use tokio_stream::{wrappers::LinesStream, Stream};
@@ -71,6 +72,11 @@ enum ResourceSpec {
         commit: String,
         previous: Option<String>,
     },
+    AssignIndex {
+        domain: String,
+        source_commit: String,
+        target_commit: String,
+    },
     CheckTask {
         task_id: String,
     },
@@ -107,6 +113,7 @@ fn query_map(uri: &Uri) -> HashMap<String, String> {
 fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
     lazy_static! {
         static ref RE_INDEX: Regex = Regex::new(r"^/index(/?)$").unwrap();
+        static ref RE_ASSIGN: Regex = Regex::new(r"^/assign(/?)$").unwrap();
         static ref RE_CHECK: Regex = Regex::new(r"^/check(/?)$").unwrap();
         static ref RE_SEARCH: Regex = Regex::new(r"^/search(/?)$").unwrap();
         static ref RE_SIMILAR: Regex = Regex::new(r"^/similar(/?)$").unwrap();
@@ -125,6 +132,21 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
                 commit,
                 previous,
             }),
+            _ => Err(SpecParseError::NoCommitIdOrDomain),
+        }
+    } else if RE_ASSIGN.is_match(path) {
+        let query = query_map(uri);
+        let domain = query.get("domain").map(|v| v.to_string());
+        let source_commit = query.get("source_commit").map(|v| v.to_string());
+        let target_commit = query.get("target_commit").map(|v| v.to_string());
+        match (domain, source_commit, target_commit) {
+            (Some(domain), Some(source_commit), Some(target_commit)) => {
+                Ok(ResourceSpec::AssignIndex {
+                    domain,
+                    source_commit,
+                    target_commit,
+                })
+            }
             _ => Err(SpecParseError::NoCommitIdOrDomain),
         }
     } else if RE_CHECK.is_match(path) {
@@ -360,6 +382,34 @@ impl Service {
         });
     }
 
+    async fn assign_index(
+        self: Arc<Self>,
+        domain: String,
+        source_commit: String,
+        target_commit: String,
+    ) -> Result<(), AssignIndexError> {
+        let source_name = create_index_name(&domain, &source_commit);
+        let target_name = create_index_name(&domain, &target_commit);
+
+        if self.get_index(&target_name).await.is_some() {
+            return Err(AssignIndexError::TargetCommitAlreadyHasIndex);
+        }
+        if let Some(index) = self.get_index(&source_name).await {
+            let mut indexes = self.indexes.write().await;
+            indexes.insert(target_name.clone(), index.clone());
+
+            std::mem::drop(indexes);
+            tokio::task::block_in_place(move || {
+                let path = self.path.clone();
+                serialize_index(path, &target_name, (*index).clone()).unwrap();
+            });
+
+            Ok(())
+        } else {
+            Err(AssignIndexError::SourceCommitNotFound)
+        }
+    }
+
     async fn process_operation_chunks(
         self: &Arc<Self>,
         mut opstream: futures::stream::Chunks<
@@ -406,6 +456,22 @@ impl Service {
                     .await;
                 self.start_indexing(domain, commit, previous, task_id.clone());
                 Ok(Response::builder().body(task_id.into()).unwrap())
+            }
+            Ok(ResourceSpec::AssignIndex {
+                domain,
+                source_commit,
+                target_commit,
+            }) => {
+                let result = self
+                    .assign_index(domain, source_commit, target_commit)
+                    .await;
+                match result {
+                    Ok(()) => Ok(Response::builder().status(204).body(Body::empty()).unwrap()),
+                    Err(e) => Ok(Response::builder()
+                        .status(400)
+                        .body(e.to_string().into())
+                        .unwrap()),
+                }
             }
             Ok(ResourceSpec::CheckTask { task_id }) => {
                 if let Some(state) = self.get_task_status(&task_id).await {
@@ -515,6 +581,16 @@ impl Service {
             Err(_) => todo!(),
         }
     }
+}
+
+#[derive(Debug, Error)]
+enum AssignIndexError {
+    #[error("io error: {0}")]
+    Io(#[from] io::Error),
+    #[error("source commit not found")]
+    SourceCommitNotFound,
+    #[error("target commit already has an index")]
+    TargetCommitAlreadyHasIndex,
 }
 
 pub async fn serve<P: Into<PathBuf>>(
