@@ -1,6 +1,7 @@
 use std::io::ErrorKind;
 use std::path::Path;
 
+use clap::CommandFactory;
 use clap::{Parser, Subcommand, ValueEnum};
 use hnsw::Hnsw;
 use indexer::serialize_index;
@@ -94,8 +95,15 @@ enum DistanceVariant {
 }
 
 fn key_or_env(k: Option<String>) -> String {
-    k.or_else(|| std::env::var("OPENAI_KEY").ok())
-        .expect("No OpenAI key given")
+    let result = k.or_else(|| std::env::var("OPENAI_KEY").ok());
+    if result.is_none() {
+        let mut app = Args::command();
+        eprintln!("Error: no OpenAI key given. Configure it with the OPENAI_KEY environment variable, or by passing in the --key argument");
+        app.print_help().unwrap();
+        std::process::exit(2);
+    }
+
+    result.unwrap()
 }
 
 #[tokio::main]
