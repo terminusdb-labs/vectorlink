@@ -1,10 +1,10 @@
-# TerminusDB Semantic Indexer
+# VectorLink: The TerminusDB Semantic Indexer
 
-The TerminusDB Semantic Indexer is a vector database with an index
-based on Hierarchical Navigable Small World graphs written in rust. It
-is designed to work closely with TerminusDB but can be used with any
-project via a simple HTTP api. In order to work well with TerminusDB
-it is designed with the following features:
+VectorLink is a vector database with an index based on Hierarchical
+Navigable Small World graphs written in rust. It is designed to work
+closely with TerminusDB but can be used with any project via a simple
+HTTP api. In order to work well with TerminusDB it is designed with
+the following features:
 
 * Domains: The database can manage several domains. In a domain you
   have a vector store which is append only. This allows you to share
