@@ -90,7 +90,7 @@ enum Commands {
 enum DistanceVariant {
     Default,
     Simd,
-    Cpu,
+    Scalar,
 }
 
 #[tokio::main]
@@ -132,7 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let p2 = &v[1];
             let distance = match variant {
                 DistanceVariant::Default => vecmath::normalized_cosine_distance(p1, p2),
-                DistanceVariant::Cpu => vecmath::normalized_cosine_distance_cpu(p1, p2),
+                DistanceVariant::Scalar => vecmath::normalized_cosine_distance_scalar(p1, p2),
                 DistanceVariant::Simd => vecmath::normalized_cosine_distance_simd(p1, p2),
             };
             println!("distance: {}", distance);

@@ -39,7 +39,7 @@ fn normalize_cosine_distance(f: f32) -> f32 {
     clamp_01((f - 1.0) / -2.0)
 }
 
-pub fn normalized_cosine_distance_cpu(left: &Embedding, right: &Embedding) -> f32 {
+pub fn normalized_cosine_distance_scalar(left: &Embedding, right: &Embedding) -> f32 {
     normalize_cosine_distance(
         left.iter()
             .zip(right.iter())
@@ -58,13 +58,13 @@ pub fn normalized_cosine_distance_simd(left: &Embedding, right: &Embedding) -> f
     unimplemented!("simd support is not enabled");
 }
 
-pub fn normalize_vec_cpu(vec: &mut Embedding) {
+pub fn normalize_vec_scalar(vec: &mut Embedding) {
     let mut sum = 0.0;
     for f in vec.iter() {
         sum += f * f;
     }
     let magnitude = sum.sqrt();
-    //eprintln!("cpu magnitude: {}", magnitude);
+    //eprintln!("scalar magnitude: {}", magnitude);
 
     for f in vec.iter_mut() {
         *f /= magnitude;
@@ -83,12 +83,12 @@ pub fn normalize_vec(vec: &mut Embedding) {
 
 #[cfg(not(feature = "simd"))]
 pub fn normalized_cosine_distance(left: &Embedding, right: &Embedding) -> f32 {
-    normalized_cosine_distance_cpu(left, right)
+    normalized_cosine_distance_scalar(left, right)
 }
 
 #[cfg(not(feature = "simd"))]
 pub fn normalize_vec(vec: &mut Embedding) {
-    normalize_vec_cpu(vec)
+    normalize_vec_scalar(vec)
 }
 
 #[cfg(feature = "simd")]
@@ -201,12 +201,12 @@ mod tests {
 
         assert_eq!(e1, e2);
 
-        normalize_vec_cpu(&mut e1);
+        normalize_vec_scalar(&mut e1);
         normalize_vec_simd_unaligned(&mut e2);
 
         eprintln!(
-            "distance (cpu): {}",
-            normalized_cosine_distance_cpu(&e1, &e2)
+            "distance (scalar): {}",
+            normalized_cosine_distance_scalar(&e1, &e2)
         );
         eprintln!(
             "distance (simd): {}",
@@ -218,10 +218,10 @@ mod tests {
         );
 
         let mut e3 = random_embedding(&mut rng);
-        normalize_vec_cpu(&mut e3);
+        normalize_vec_scalar(&mut e3);
         eprintln!(
-            "distance (cpu): {}",
-            normalized_cosine_distance_cpu(&e1, &e3)
+            "distance (scalar): {}",
+            normalized_cosine_distance_scalar(&e1, &e3)
         );
         eprintln!(
             "distance (simd): {}",
