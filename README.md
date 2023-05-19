@@ -1,13 +1,13 @@
 # VectorLink: The TerminusDB Semantic Indexer
 
 VectorLink is a vector database with an index based on Hierarchical
-Navigable Small World graphs written in rust. It is designed to work
+Navigable Small World graphs written in Rust. It is designed to work
 closely with TerminusDB but can be used with any project via a simple
-HTTP api. In order to work well with TerminusDB it is designed with
+HTTP API. In order to work well with TerminusDB it is designed with
 the following features:
 
-* Domains: The database can manage several domains. In a domain you
-  have a vector store which is append only. This allows you to share
+* Domains: The database can manage several domains. In a domain, you
+  have a vector store which is append-only. This allows you to share
   vectors across indexes.
 * Commits: Each index exists at a commit. The index can point to any
   vector in a domain. This allows us to add and remove vectors by
@@ -21,7 +21,7 @@ To invoke the server, you can run it as follows:
 
 ## Compiling
 
-You can comile the system with cargo:
+You can compile the system with cargo:
 
 ```shell
 cargo compile --release
@@ -49,7 +49,7 @@ If you wan to index documents, you can any of these methods:
   `TERMINUSDB_CONTENT_ENDPOINT/{domain}?commit_id={commit}`
 * use the `load` command with a file
 
-In any of these cases, the indexer expects a content stream which will
+In any of these cases, the indexer expects a content stream that will
 have the form (in JSONlines format):
 
 ```json
@@ -86,19 +86,19 @@ indexing (specified by the `id` field).
 
 ## Todo
 
-Lots of work to make this the open source versioned vector database
+Lots of work to make this the open-source versioned vector database
 that the world deserves. Anyone who wants to work on the project to
 advance these aims is welcome:
 
 * Add other AI configurations for obtaining the embeddings - we'd like
   to be very complete and have ways of configuring other vendors and
-  open source text-to-embedding systems.
+  open-source text-to-embedding systems.
 * Greater scope of metric support
 * Improve compression: We'd like to have a sytem of vector compression
   such as PQ for dealing with very large datasets.
 * Better treatment of deletion and replace
 * Better incrementality of the index structure
-* Smaller graph reprsentations of the indicies - using succinct data
+* Smaller graph representations of the indices - using succinct data
   structures to reduce memory overhead.
 
 And if you have new ideas we'd love to hear them!
