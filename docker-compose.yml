@@ -20,4 +20,4 @@ services:
       - OPENAI_KEY=${OPENAI_KEY}
     volumes:
       - ./vector_storage:/app/storage
-    command: ["./terminusdb-semantic-indexer", "serve", "--directory", "/app/storage", "--size", ${BUFFER_AMOUNT}]
+    command: ["./terminusdb-semantic-indexer", "serve", "--directory", "/app/storage", "--size", "${BUFFER_AMOUNT}"]
