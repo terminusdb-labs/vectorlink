@@ -27,6 +27,23 @@ You can compile the system with cargo:
 cargo compile --release
 ```
 
+## Running with docker-compose
+
+Create a .env file with the following contents:
+
+```
+OPENAI_KEY=YOUR_OPENAI_KEY
+BUFFER_AMOUNT=1200000
+```
+
+The buffers are 12kb each, so this will roughly be ~1.2GB of memory.
+You can change this depending on your memory requirements.
+
+After you created the ENV file, you can start the server by
+running `docker compose up` or `docker-compose up` depending
+on your docker-compose version. This will start a TerminusDB
+server on port 6363 and a VectorLink server on port 8080.
+
 ## Invoking
 
 In order to invoke the server, you need to supply an OpenAI key. This
