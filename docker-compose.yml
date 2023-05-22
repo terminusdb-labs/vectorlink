@@ -2,7 +2,7 @@ version: "3"
 
 services:
   terminusdb:
-    image: terminusdb/terminusdb-server:dev
+    image: terminusdb/terminusdb-server:semantic_indexer
     container_name: terminusdb-server
     tty: true
     ports:
