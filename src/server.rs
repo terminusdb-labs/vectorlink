@@ -215,7 +215,7 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
 
 #[derive(Clone, Debug)]
 pub enum TaskStatus {
-    Pending,
+    Pending(f32),
     Error,
     Completed,
 }
@@ -348,9 +348,9 @@ impl Service {
     }
 
     async fn serve(self: Arc<Self>, req: Request<Body>) -> Result<Response<Body>, Infallible> {
-        match req.method() {
-            &Method::POST => self.post(req).await,
-            &Method::GET => self.get(req).await,
+        match *req.method() {
+            Method::POST => self.post(req).await,
+            Method::GET => self.get(req).await,
             _ => todo!(),
         }
     }
@@ -389,7 +389,9 @@ impl Service {
                     .unwrap()
                     .chunks(100);
                     let (id, hnsw) = self
-                        .process_operation_chunks(opstream, domain, commit, previous, &index_id)
+                        .process_operation_chunks(
+                            opstream, domain, commit, previous, &index_id, &task_id,
+                        )
                         .await;
                     self.set_index(id, hnsw.into()).await;
                     self.clear_pending(&index_id).await;
@@ -439,6 +441,7 @@ impl Service {
         commit: String,
         previous: Option<String>,
         index_id: &str,
+        task_id: &str,
     ) -> (String, HnswIndex) {
         let id = create_index_name(&domain, &commit);
         let mut hnsw = self
@@ -447,6 +450,8 @@ impl Service {
                 commit,
                 previous,
             })
+            .await;
+        self.set_task_status(task_id.to_string(), TaskStatus::Pending(0.3))
             .await;
         while let Some(structs) = opstream.next().await {
             let new_ops = operations_to_point_operations(
@@ -458,6 +463,8 @@ impl Service {
             .await;
             hnsw = start_indexing_from_operations(hnsw, new_ops).unwrap();
         }
+        self.set_task_status(task_id.to_string(), TaskStatus::Pending(0.8))
+            .await;
         let path = self.path.clone();
         serialize_index(path, index_id, hnsw.clone()).unwrap();
         (id, hnsw)
@@ -472,7 +479,7 @@ impl Service {
                 previous,
             }) => {
                 let task_id = Service::generate_task();
-                self.set_task_status(task_id.clone(), TaskStatus::Pending)
+                self.set_task_status(task_id.clone(), TaskStatus::Pending(0.0))
                     .await;
                 match self.start_indexing(domain, commit, previous, task_id.clone()) {
                     Ok(()) => Ok(Response::builder().body(task_id.into()).unwrap()),
@@ -500,13 +507,19 @@ impl Service {
             }
             Ok(ResourceSpec::CheckTask { task_id }) => {
                 if let Some(state) = self.get_task_status(&task_id).await {
-                    Ok(Response::builder()
-                        .body(format!("{:?}", state).into())
-                        .unwrap())
+                    match state {
+                        TaskStatus::Pending(f) => {
+                            Ok(Response::builder().body(format!("{}", f).into()).unwrap())
+                        }
+                        TaskStatus::Error => Ok(Response::builder()
+                            .body(format!("{:?}", state).into())
+                            .unwrap()),
+                        TaskStatus::Completed => {
+                            Ok(Response::builder().body(format!("{}", 1.0).into()).unwrap())
+                        }
+                    }
                 } else {
-                    Ok(Response::builder()
-                        .body(format!("{:?}", TaskStatus::Completed).into())
-                        .unwrap())
+                    Ok(Response::builder().body(format!("{}", 1.0).into()).unwrap())
                 }
             }
             Ok(ResourceSpec::DuplicateCandidates {
