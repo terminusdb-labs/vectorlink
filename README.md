@@ -63,7 +63,7 @@ If you wan to index documents, you can any of these methods:
 * Run a TerminusDB installation and refer to real commits and databases
 * Put up an endpoint that will issue the appropriate operations for a
   commit id and a domain with the endpoint
-  `TERMINUSDB_CONTENT_ENDPOINT/{domain}?commit_id={commit}`
+  `TERMINUSDB_CONTENT_ENDPOINT/{domain}?commit={commit}`
 * use the `load` command with a file
 
 In any of these cases, the indexer expects a content stream that will

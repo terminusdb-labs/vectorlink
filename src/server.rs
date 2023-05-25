@@ -93,10 +93,13 @@ enum ResourceSpec {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 enum SpecParseError {
+    #[error("Unknown URL Path")]
     UnknownPath,
+    #[error("No task id")]
     NoTaskId,
+    #[error("No commit id or domain id given")]
     NoCommitIdOrDomain,
 }
 
@@ -585,7 +588,10 @@ impl Service {
                 }
             }
             Ok(_) => todo!(),
-            Err(_) => todo!(),
+            Err(e) => Ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(e.to_string().into())
+                .unwrap()),
         }
     }
 
