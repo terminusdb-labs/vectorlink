@@ -376,6 +376,7 @@ impl Service {
         commit: String,
         previous: Option<String>,
         task_id: String,
+        api_key: String,
     ) -> Result<(), StartIndexError> {
         let content_endpoint = self.content_endpoint.clone();
         if let Some(content_endpoint) = content_endpoint {
@@ -393,7 +394,7 @@ impl Service {
                     .chunks(100);
                     let (id, hnsw) = self
                         .process_operation_chunks(
-                            opstream, domain, commit, previous, &index_id, &task_id,
+                            opstream, domain, commit, previous, &index_id, &task_id, &api_key,
                         )
                         .await;
                     self.set_index(id, hnsw.into()).await;
@@ -445,6 +446,7 @@ impl Service {
         previous: Option<String>,
         index_id: &str,
         task_id: &str,
+        api_key: &str,
     ) -> (String, HnswIndex) {
         let id = create_index_name(&domain, &commit);
         let mut hnsw = self
@@ -461,7 +463,7 @@ impl Service {
                 &domain.clone(),
                 &self.vector_store,
                 structs,
-                &self.api_key,
+                api_key,
             )
             .await;
             hnsw = start_indexing_from_operations(hnsw, new_ops).unwrap();
@@ -482,13 +484,34 @@ impl Service {
                 previous,
             }) => {
                 let task_id = Service::generate_task();
-                self.set_task_status(task_id.clone(), TaskStatus::Pending(0.0))
-                    .await;
-                match self.start_indexing(domain, commit, previous, task_id.clone()) {
-                    Ok(()) => Ok(Response::builder().body(task_id.into()).unwrap()),
-                    Err(e) => Ok(Response::builder()
+                let headers = req.headers();
+                let openai_key = headers.get("TERMINUSDB_VECTOR_API_KEY");
+                match openai_key {
+                    Some(openai_key) => {
+                        let openai_key = String::from_utf8(openai_key.as_bytes().to_vec()).unwrap();
+                        self.set_task_status(task_id.clone(), TaskStatus::Pending(0.0))
+                            .await;
+                        match self.start_indexing(
+                            domain,
+                            commit,
+                            previous,
+                            task_id.clone(),
+                            openai_key,
+                        ) {
+                            Ok(()) => Ok(Response::builder().body(task_id.into()).unwrap()),
+                            Err(e) => Ok(Response::builder()
+                                .status(400)
+                                .body(e.to_string().into())
+                                .unwrap()),
+                        }
+                    }
+                    None => Ok(Response::builder()
                         .status(400)
-                        .body(e.to_string().into())
+                        .body(
+                            "No API key supplied in header (TERMINUSDB_VECTOR_API_KEY)"
+                                .to_string()
+                                .into(),
+                        )
                         .unwrap()),
                 }
             }

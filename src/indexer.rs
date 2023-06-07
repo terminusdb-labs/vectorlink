@@ -93,6 +93,7 @@ pub async fn operations_to_point_operations(
     structs: Vec<Result<Operation, std::io::Error>>,
     key: &str,
 ) -> Vec<PointOperation> {
+    // Should not unwrap here -
     let ops: Vec<Operation> = structs.into_iter().map(|ro| ro.unwrap()).collect();
     let tuples: Vec<(Op, String, String)> = ops
         .iter()
