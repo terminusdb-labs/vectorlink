@@ -485,7 +485,7 @@ impl Service {
             }) => {
                 let task_id = Service::generate_task();
                 let headers = req.headers();
-                let openai_key = headers.get("TERMINUSDB_VECTOR_API_KEY");
+                let openai_key = headers.get("VECTORLINK_EMBEDDING_API_KEY");
                 match openai_key {
                     Some(openai_key) => {
                         let openai_key = String::from_utf8(openai_key.as_bytes().to_vec()).unwrap();
@@ -508,7 +508,7 @@ impl Service {
                     None => Ok(Response::builder()
                         .status(400)
                         .body(
-                            "No API key supplied in header (TERMINUSDB_VECTOR_API_KEY)"
+                            "No API key supplied in header (VECTORLINK_EMBEDDING_API_KEY)"
                                 .to_string()
                                 .into(),
                         )
