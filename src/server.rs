@@ -315,6 +315,8 @@ enum ResponseError {
     StartIndexError(#[from] StartIndexError),
     #[error("{0:?}")]
     SearchError(#[from] SearchError),
+    #[error("Missing id in index {0}")]
+    IdMissing(String),
 }
 
 fn add_to_duplicates(duplicates: &mut HashMap<usize, usize>, id1: usize, id2: usize) {
@@ -526,7 +528,7 @@ impl Service {
                 previous,
             }) => {
                 let result = self.get_start_index(req, domain, commit, previous).await;
-                fun_name(result)
+                string_response_or_error(result)
             }
             Ok(ResourceSpec::AssignIndex {
                 domain,
@@ -569,10 +571,7 @@ impl Service {
                 let result = self
                     .get_duplicate_candidates(domain, commit, threshold)
                     .await;
-                match result {
-                    Ok(result) => todo!(),
-                    Err(e) => todo!(),
-                }
+                string_response_or_error(result)
             }
             Ok(ResourceSpec::Similar {
                 domain,
@@ -580,40 +579,48 @@ impl Service {
                 count,
                 id,
             }) => {
-                let index_id = create_index_name(&domain, &commit);
-                // if None, then return 404
-                let hnsw = self.get_index(&index_id).await.unwrap();
-                let elts = hnsw.layer_len(0);
-                let mut qp = None;
-                for i in 0..elts {
-                    if *hnsw.feature(i).id() == id {
-                        qp = Some(hnsw.feature(i))
-                    }
-                }
-                match qp {
-                    Some(qp) => {
-                        let res = search(qp, count, &hnsw).unwrap();
-                        let ids: Vec<QueryResult> = res
-                            .iter()
-                            .map(|p| QueryResult {
-                                id: p.id().to_string(),
-                                distance: f32::from_bits(p.distance()),
-                            })
-                            .collect();
-                        let s = serde_json::to_string(&ids).unwrap();
-                        Ok(Response::builder().body(s.into()).unwrap())
-                    }
-                    None => Ok(Response::builder()
-                        .status(StatusCode::NOT_FOUND)
-                        .body("id not found".into())
-                        .unwrap()),
-                }
+                let result = self.get_similar_documents(domain, commit, id, count).await;
+                string_response_or_error(result)
             }
             Ok(_) => todo!(),
             Err(e) => Ok(Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(e.to_string().into())
                 .unwrap()),
+        }
+    }
+
+    async fn get_similar_documents(
+        self: Arc<Self>,
+        domain: String,
+        commit: String,
+        id: String,
+        count: usize,
+    ) -> Result<String, ResponseError> {
+        let index_id = create_index_name(&domain, &commit);
+        // if None, then return 404
+        let hnsw = self.get_index(&index_id).await?;
+        let elts = hnsw.layer_len(0);
+        let mut qp = None;
+        for i in 0..elts {
+            if *hnsw.feature(i).id() == id {
+                qp = Some(hnsw.feature(i))
+            }
+        }
+        match qp {
+            Some(qp) => {
+                let res = search(qp, count, &hnsw)?;
+                let ids: Vec<QueryResult> = res
+                    .iter()
+                    .map(|p| QueryResult {
+                        id: p.id().to_string(),
+                        distance: f32::from_bits(p.distance()),
+                    })
+                    .collect();
+                let s = serde_json::to_string(&ids)?;
+                Ok(s)
+            }
+            None => Err(ResponseError::IdMissing(id)),
         }
     }
 
@@ -702,7 +709,9 @@ impl Service {
     }
 }
 
-fn fun_name(result: Result<String, ResponseError>) -> Result<Response<Body>, Infallible> {
+fn string_response_or_error(
+    result: Result<String, ResponseError>,
+) -> Result<Response<Body>, Infallible> {
     match result {
         Ok(task_id) => Ok(Response::builder().body(task_id.into()).unwrap()),
         Err(e) => Ok(Response::builder()
