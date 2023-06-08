@@ -7,7 +7,7 @@ use std::io::{self, Seek, SeekFrom, Write};
 use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::os::unix::prelude::FileExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{self, AtomicUsize};
 use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 
@@ -45,8 +45,8 @@ pub struct Domain {
 }
 
 impl Domain {
-    fn open(dir: &PathBuf, name: &str, index: usize) -> io::Result<Self> {
-        let mut path = dir.clone();
+    fn open(dir: &Path, name: &str, index: usize) -> io::Result<Self> {
+        let mut path = dir.to_path_buf();
         let name = encode(name);
         path.push(format!("{name}.vecs"));
         let mut write_file = File::options()
@@ -150,9 +150,11 @@ struct PageSpec {
     index: usize,
 }
 
+type GuardedLoadState = Arc<(Condvar, Mutex<LoadState>)>;
+
 struct PageArena {
     free: Mutex<Vec<Box<VectorPage>>>,
-    loading: Mutex<HashMap<PageSpec, Arc<(Condvar, Mutex<LoadState>)>>>,
+    loading: Mutex<HashMap<PageSpec, GuardedLoadState>>,
     loaded: RwLock<HashMap<PageSpec, PinnedVectorPage>>,
     cache: RwLock<LruCache<PageSpec, LoadedVectorPage>>,
 }
@@ -167,10 +169,7 @@ enum LoadState {
 
 impl LoadState {
     fn is_loading(&self) -> bool {
-        match self {
-            Self::Loading => true,
-            _ => false,
-        }
+        matches!(self, Self::Loading)
     }
 }
 
@@ -230,7 +229,7 @@ impl PageArena {
 
     fn start_loading_or_wait(self: &Arc<Self>, spec: PageSpec) -> LoadState {
         let mut loading = self.loading.lock().unwrap();
-        if let Some(x) = loading.get(&spec).map(|x| x.clone()) {
+        if let Some(x) = loading.get(&spec).cloned() {
             // someone is already loading. Let's wait.
             std::mem::drop(loading);
             let (cv, m) = &*x;
@@ -332,9 +331,7 @@ impl PageArena {
         let mut cache = self.cache.write().unwrap();
 
         let page = cache.pop(&spec);
-        if page.is_none() {
-            return None;
-        }
+        page.as_ref()?;
         let page = page.unwrap();
         let handle = Arc::new(PageHandle {
             spec,
@@ -453,7 +450,7 @@ impl PageHandle {
         // returns the pagehandle as an arc, and the page doesn't get
         // moved out of the loaded pages unless this arc's refcount is
         // 0.
-        unsafe { &*(self.p as *const Embedding).offset(index as isize) }
+        unsafe { &*(self.p as *const Embedding).add(index) }
     }
 
     pub fn get_loaded_vec(self: &Arc<Self>, index: usize) -> LoadedVec {
@@ -464,7 +461,7 @@ impl PageHandle {
             );
         }
 
-        let vec = unsafe { (self.p as *const Embedding).offset(index as isize) };
+        let vec = unsafe { (self.p as *const Embedding).add(index) };
         LoadedVec {
             page: self.clone(),
             vec,
