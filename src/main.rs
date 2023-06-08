@@ -35,8 +35,6 @@ struct Args {
 enum Commands {
     Serve {
         #[arg(short, long)]
-        key: Option<String>,
-        #[arg(short, long)]
         content_endpoint: Option<String>,
         #[arg(short, long)]
         directory: String,
@@ -117,7 +115,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Args::parse();
     match args.command {
         Commands::Serve {
-            key,
             content_endpoint,
             directory,
             port,
@@ -127,7 +124,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 directory,
                 port,
                 size,
-                key_or_env(key),
                 content_endpoint_or_env(content_endpoint),
             )
             .await?
