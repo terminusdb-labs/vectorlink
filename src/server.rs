@@ -3,6 +3,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use hnsw::Hnsw;
+use hyper::HeaderMap;
 use hyper::StatusCode;
 use hyper::{
     service::{make_service_fn, service_fn},
@@ -28,6 +29,7 @@ use std::{
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
+use tokio::task;
 use tokio::{io::AsyncBufReadExt, sync::RwLock};
 use tokio_stream::{wrappers::LinesStream, Stream};
 use tokio_util::io::StreamReader;
@@ -39,6 +41,7 @@ use crate::indexer::search;
 use crate::indexer::serialize_index;
 use crate::indexer::Point;
 use crate::indexer::PointOperation;
+use crate::indexer::SearchError;
 use crate::indexer::{start_indexing_from_operations, HnswIndex, IndexIdentifier, OpenAI};
 use crate::openai::embeddings_for;
 use crate::vectors::VectorStore;
@@ -111,6 +114,28 @@ fn query_map(uri: &Uri) -> HashMap<String, String> {
                 .collect()
         })
         .unwrap_or_else(|| HashMap::with_capacity(0))
+}
+
+#[derive(Debug, Error)]
+enum HeaderError {
+    #[error("Key was not valid utf8")]
+    KeyNotUtf8,
+    #[error("Missing the key {0}")]
+    MissingKey(String),
+}
+
+fn get_header_value(header: &HeaderMap, key: &str) -> Result<String, HeaderError> {
+    let value = header.get(key);
+    match value {
+        Some(value) => {
+            let value = String::from_utf8(value.as_bytes().to_vec());
+            match value {
+                Ok(value) => Ok(value),
+                Err(_) => Err(HeaderError::KeyNotUtf8),
+            }
+        }
+        None => Err(HeaderError::MissingKey(key.to_string())),
+    }
 }
 
 fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
@@ -278,6 +303,20 @@ async fn get_operations_from_content_endpoint(
     Ok(fp)
 }
 
+#[derive(Debug, Error)]
+enum ResponseError {
+    #[error("{0:?}")]
+    HeaderError(#[from] HeaderError),
+    #[error("{0:?}")]
+    IoError(#[from] std::io::Error),
+    #[error("{0:?}")]
+    SerdeError(#[from] serde_json::Error),
+    #[error("{0:?}")]
+    StartIndexError(#[from] StartIndexError),
+    #[error("{0:?}")]
+    SearchError(#[from] SearchError),
+}
+
 fn add_to_duplicates(duplicates: &mut HashMap<usize, usize>, id1: usize, id2: usize) {
     if id1 < id2 {
         duplicates.insert(id1, id2);
@@ -293,15 +332,12 @@ impl Service {
         self.tasks.write().await.insert(task_id, status);
     }
 
-    async fn get_index(&self, index_id: &str) -> Option<Arc<HnswIndex>> {
+    async fn get_index(&self, index_id: &str) -> io::Result<Arc<HnswIndex>> {
         if let Some(hnsw) = self.indexes.read().await.get(index_id) {
-            Some(hnsw).cloned()
+            Ok(hnsw).cloned()
         } else {
             let mut path = self.path.clone();
-            match deserialize_index(&mut path, index_id, &self.vector_store) {
-                Ok(res) => Some(res.into()),
-                Err(_) => None,
-            }
+            Ok(deserialize_index(&mut path, index_id, &self.vector_store)?.into())
         }
     }
 
@@ -416,24 +452,16 @@ impl Service {
     ) -> Result<(), AssignIndexError> {
         let source_name = create_index_name(&domain, &source_commit);
         let target_name = create_index_name(&domain, &target_commit);
-
-        if self.get_index(&target_name).await.is_some() {
-            return Err(AssignIndexError::TargetCommitAlreadyHasIndex);
-        }
-        if let Some(index) = self.get_index(&source_name).await {
-            let mut indexes = self.indexes.write().await;
-            indexes.insert(target_name.clone(), index.clone());
-
-            std::mem::drop(indexes);
-            tokio::task::block_in_place(move || {
-                let path = self.path.clone();
-                serialize_index(path, &target_name, (*index).clone()).unwrap();
-            });
-
-            Ok(())
-        } else {
-            Err(AssignIndexError::SourceCommitNotFound)
-        }
+        self.get_index(&target_name).await?;
+        let index = self.get_index(&source_name).await?;
+        let mut indexes = self.indexes.write().await;
+        indexes.insert(target_name.clone(), index.clone());
+        std::mem::drop(indexes);
+        tokio::task::block_in_place(move || {
+            let path = self.path.clone();
+            serialize_index(path, &target_name, (*index).clone()).unwrap();
+        });
+        Ok(())
     }
 
     async fn process_operation_chunks(
@@ -475,6 +503,20 @@ impl Service {
         (id, hnsw)
     }
 
+    async fn get_start_index(
+        self: Arc<Self>,
+        req: Request<Body>,
+        domain: String,
+        commit: String,
+        previous: Option<String>,
+    ) -> Result<String, ResponseError> {
+        let task_id = Service::generate_task();
+        let api_key = get_header_value(req.headers(), "VECTORLINK_EMBEDDING_API_KEY")?;
+        self.set_task_status(task_id.clone(), TaskStatus::Pending(0.0));
+        self.start_indexing(domain, commit, previous, task_id.clone(), api_key)?;
+        Ok(task_id)
+    }
+
     async fn get(self: Arc<Self>, req: Request<Body>) -> Result<Response<Body>, Infallible> {
         let uri = req.uri();
         match dbg!(uri_to_spec(uri)) {
@@ -483,37 +525,8 @@ impl Service {
                 commit,
                 previous,
             }) => {
-                let task_id = Service::generate_task();
-                let headers = req.headers();
-                let openai_key = headers.get("VECTORLINK_EMBEDDING_API_KEY");
-                match openai_key {
-                    Some(openai_key) => {
-                        let openai_key = String::from_utf8(openai_key.as_bytes().to_vec()).unwrap();
-                        self.set_task_status(task_id.clone(), TaskStatus::Pending(0.0))
-                            .await;
-                        match self.start_indexing(
-                            domain,
-                            commit,
-                            previous,
-                            task_id.clone(),
-                            openai_key,
-                        ) {
-                            Ok(()) => Ok(Response::builder().body(task_id.into()).unwrap()),
-                            Err(e) => Ok(Response::builder()
-                                .status(400)
-                                .body(e.to_string().into())
-                                .unwrap()),
-                        }
-                    }
-                    None => Ok(Response::builder()
-                        .status(400)
-                        .body(
-                            "No API key supplied in header (VECTORLINK_EMBEDDING_API_KEY)"
-                                .to_string()
-                                .into(),
-                        )
-                        .unwrap()),
-                }
+                let result = self.get_start_index(req, domain, commit, previous).await;
+                fun_name(result)
             }
             Ok(ResourceSpec::AssignIndex {
                 domain,
@@ -553,27 +566,13 @@ impl Service {
                 commit,
                 threshold,
             }) => {
-                let index_id = create_index_name(&domain, &commit);
-                // if None, then return 404
-                let hnsw = self.get_index(&index_id).await.unwrap();
-                let mut duplicates: HashMap<usize, usize> = HashMap::new();
-                let elts = hnsw.layer_len(0);
-                for i in 0..elts {
-                    let current_point = &hnsw.feature(i);
-                    let results = search(current_point, 2, &hnsw).unwrap();
-                    for result in results.iter() {
-                        if f32::from_bits(result.distance()) < threshold {
-                            add_to_duplicates(&mut duplicates, i, result.internal_id())
-                        }
-                    }
+                let result = self
+                    .get_duplicate_candidates(domain, commit, threshold)
+                    .await;
+                match result {
+                    Ok(result) => todo!(),
+                    Err(e) => todo!(),
                 }
-                let mut v: Vec<(&str, &str)> = duplicates
-                    .into_iter()
-                    .map(|(i, j)| (hnsw.feature(i).id(), hnsw.feature(j).id()))
-                    .collect();
-                Ok(Response::builder()
-                    .body(serde_json::to_string(&v).unwrap().into())
-                    .unwrap())
             }
             Ok(ResourceSpec::Similar {
                 domain,
@@ -618,6 +617,34 @@ impl Service {
         }
     }
 
+    async fn get_duplicate_candidates(
+        self: Arc<Self>,
+        domain: String,
+        commit: String,
+        threshold: f32,
+    ) -> Result<String, ResponseError> {
+        let index_id = create_index_name(&domain, &commit);
+        // if None, then return 404
+        let hnsw = self.get_index(&index_id).await?;
+        let mut duplicates: HashMap<usize, usize> = HashMap::new();
+        let elts = hnsw.layer_len(0);
+        for i in 0..elts {
+            let current_point = &hnsw.feature(i);
+            let results = search(current_point, 2, &hnsw)?;
+            for result in results.iter() {
+                if f32::from_bits(result.distance()) < threshold {
+                    add_to_duplicates(&mut duplicates, i, result.internal_id())
+                }
+            }
+        }
+        let mut v: Vec<(&str, &str)> = duplicates
+            .into_iter()
+            .map(|(i, j)| (hnsw.feature(i).id(), hnsw.feature(j).id()))
+            .collect();
+        let result = serde_json::to_string(&v)?;
+        Ok(result)
+    }
+
     async fn post(&self, req: Request<Body>) -> Result<Response<Body>, Infallible> {
         let uri = req.uri();
         match uri_to_spec(uri) {
@@ -626,27 +653,62 @@ impl Service {
                 commit,
                 count,
             }) => {
-                let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap();
+                let headers = req.headers().clone();
+                let body = req.into_body();
+                let body_bytes = hyper::body::to_bytes(body).await.unwrap();
                 let q = String::from_utf8(body_bytes.to_vec()).unwrap();
-                let vec = Box::new((embeddings_for(&self.api_key, &[q]).await.unwrap())[0]);
-                let qp = Point::Mem { vec };
-                let index_id = create_index_name(&domain, &commit);
-                // if None, then return 404
-                let hnsw = self.get_index(&index_id).await.unwrap();
-                let res = search(&qp, count, &hnsw).unwrap();
-                let ids: Vec<QueryResult> = res
-                    .iter()
-                    .map(|p| QueryResult {
-                        id: p.id().to_string(),
-                        distance: f32::from_bits(p.distance()),
-                    })
-                    .collect();
-                let s = serde_json::to_string(&ids).unwrap();
-                Ok(Response::builder().body(s.into()).unwrap())
+                let api_key = get_header_value(&headers, "VECTORLINK_EMBEDDING_API_KEY");
+                let result = self.index_response(api_key, q, domain, commit, count).await;
+                match result {
+                    Ok(body) => Ok(body),
+                    Err(e) => Ok(Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(e.to_string().into())
+                        .unwrap()),
+                }
             }
             Ok(_) => todo!(),
-            Err(_) => todo!(),
+            Err(e) => Ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(e.to_string().into())
+                .unwrap()),
         }
+    }
+
+    async fn index_response(
+        &self,
+        api_key: Result<String, HeaderError>,
+        q: String,
+        domain: String,
+        commit: String,
+        count: usize,
+    ) -> Result<Response<Body>, ResponseError> {
+        let api_key = api_key?;
+        let vec = Box::new((embeddings_for(&self.api_key, &[q]).await.unwrap())[0]);
+        let qp = Point::Mem { vec };
+        let index_id = create_index_name(&domain, &commit);
+        // if None, then return 404
+        let hnsw = self.get_index(&index_id).await?;
+        let res = search(&qp, count, &hnsw).unwrap();
+        let ids: Vec<QueryResult> = res
+            .iter()
+            .map(|p| QueryResult {
+                id: p.id().to_string(),
+                distance: f32::from_bits(p.distance()),
+            })
+            .collect();
+        let s = serde_json::to_string(&ids)?;
+        Ok(Response::builder().body(s.into()).unwrap())
+    }
+}
+
+fn fun_name(result: Result<String, ResponseError>) -> Result<Response<Body>, Infallible> {
+    match result {
+        Ok(task_id) => Ok(Response::builder().body(task_id.into()).unwrap()),
+        Err(e) => Ok(Response::builder()
+            .status(400)
+            .body(e.to_string().into())
+            .unwrap()),
     }
 }
 

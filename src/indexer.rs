@@ -15,6 +15,7 @@ use std::{
     iter::{self, zip},
     path::PathBuf,
 };
+use thiserror::Error;
 use urlencoding::{decode, encode};
 
 pub type HnswIndex = Hnsw<OpenAI, Point, Lcg128Xsl64, 24, 48>;
@@ -172,8 +173,9 @@ pub fn start_indexing_from_operations(
     Ok(hnsw)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum SearchError {
+    #[error("Search failed for unknown reason")]
     SearchFailed,
 }
 
