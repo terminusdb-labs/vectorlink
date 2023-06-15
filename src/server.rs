@@ -256,7 +256,6 @@ pub struct QueryResult {
 
 pub struct Service {
     content_endpoint: Option<String>,
-    api_key: String,
     path: PathBuf,
     vector_store: VectorStore,
     pending: Mutex<HashSet<String>>,
@@ -370,16 +369,10 @@ impl Service {
         s
     }
 
-    fn new<P: Into<PathBuf>>(
-        path: P,
-        num_bufs: usize,
-        key: String,
-        content_endpoint: Option<String>,
-    ) -> Self {
+    fn new<P: Into<PathBuf>>(path: P, num_bufs: usize, content_endpoint: Option<String>) -> Self {
         let path = path.into();
         Service {
             content_endpoint,
-            api_key: key,
             path: path.clone(),
             vector_store: VectorStore::new(path, num_bufs),
             pending: Mutex::new(HashSet::new()),
@@ -691,7 +684,7 @@ impl Service {
         count: usize,
     ) -> Result<Response<Body>, ResponseError> {
         let api_key = api_key?;
-        let vec = Box::new((embeddings_for(&self.api_key, &[q]).await.unwrap())[0]);
+        let vec = Box::new((embeddings_for(&api_key, &[q]).await.unwrap())[0]);
         let qp = Point::Mem { vec };
         let index_id = create_index_name(&domain, &commit);
         // if None, then return 404
@@ -735,11 +728,10 @@ pub async fn serve<P: Into<PathBuf>>(
     directory: P,
     port: u16,
     num_bufs: usize,
-    key: String,
     content_endpoint: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
-    let service = Arc::new(Service::new(directory, num_bufs, key, content_endpoint));
+    let service = Arc::new(Service::new(directory, num_bufs, content_endpoint));
     let make_svc = make_service_fn(move |_conn| {
         let s = service.clone();
         async {
