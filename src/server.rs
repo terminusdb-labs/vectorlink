@@ -447,7 +447,6 @@ impl Service {
     ) -> Result<(), AssignIndexError> {
         let source_name = create_index_name(&domain, &source_commit);
         let target_name = create_index_name(&domain, &target_commit);
-        self.get_index(&target_name).await?;
         let index = self.get_index(&source_name).await?;
         let mut indexes = self.indexes.write().await;
         indexes.insert(target_name.clone(), index.clone());
