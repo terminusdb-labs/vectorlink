@@ -9,6 +9,8 @@ services:
       - 6363:6363
     environment:
       - TERMINUSDB_SERVER_PORT=6363
+      - TERMINUSDB_INSECURE_USER_HEADER=X-User-Forward
+      - TERMINUSDB_INSECURE_USER_HEADER_ENABLED=true
     volumes:
       - ./storage:/app/terminusdb/storage
   semantic_indexer:
@@ -17,6 +19,7 @@ services:
       - "8080:8080"
     environment:
       - TERMINUSDB_CONTENT_ENDPOINT=http://terminusdb:6363
+      - TERMINUSDB_USER_FORWARD_HEADER=X-User-Forward
       - OPENAI_KEY=${OPENAI_KEY}
     volumes:
       - ./vector_storage:/app/storage

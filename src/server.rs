@@ -256,6 +256,7 @@ pub struct QueryResult {
 
 pub struct Service {
     content_endpoint: Option<String>,
+    user_forward_header: String,
     path: PathBuf,
     vector_store: VectorStore,
     pending: Mutex<HashSet<String>>,
@@ -277,6 +278,7 @@ enum TerminusIndexOperationError {}
 
 async fn get_operations_from_content_endpoint(
     content_endpoint: String,
+    user_forward_header: String,
     domain: String,
     commit: String,
     previous: Option<String>,
@@ -287,7 +289,10 @@ async fn get_operations_from_content_endpoint(
     }
     let endpoint = format!("{}/{}", content_endpoint, &domain);
     let url = reqwest::Url::parse_with_params(&endpoint, &params).unwrap();
-    let res = reqwest::get(url)
+    let client = reqwest::Client::new();
+    let res = client.get(url)
+        .header(user_forward_header, "admin")
+        .send()
         .await
         .unwrap()
         .bytes_stream()
@@ -369,10 +374,11 @@ impl Service {
         s
     }
 
-    fn new<P: Into<PathBuf>>(path: P, num_bufs: usize, content_endpoint: Option<String>) -> Self {
+    fn new<P: Into<PathBuf>>(path: P, user_forward_header: String, num_bufs: usize, content_endpoint: Option<String>) -> Self {
         let path = path.into();
         Service {
             content_endpoint,
+            user_forward_header,
             path: path.clone(),
             vector_store: VectorStore::new(path, num_bufs),
             pending: Mutex::new(HashSet::new()),
@@ -416,6 +422,7 @@ impl Service {
                 if self.test_and_set_pending(index_id.clone()).await {
                     let opstream = get_operations_from_content_endpoint(
                         content_endpoint.to_string(),
+                        self.user_forward_header.clone(),
                         domain.clone(),
                         commit.clone(),
                         previous.clone(),
@@ -725,12 +732,13 @@ enum AssignIndexError {
 
 pub async fn serve<P: Into<PathBuf>>(
     directory: P,
+    user_forward_header: String,
     port: u16,
     num_bufs: usize,
     content_endpoint: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
-    let service = Arc::new(Service::new(directory, num_bufs, content_endpoint));
+    let service = Arc::new(Service::new(directory, user_forward_header, num_bufs, content_endpoint));
     let make_svc = make_service_fn(move |_conn| {
         let s = service.clone();
         async {
