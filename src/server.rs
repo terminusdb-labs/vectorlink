@@ -39,6 +39,7 @@ use crate::indexer::deserialize_index;
 use crate::indexer::operations_to_point_operations;
 use crate::indexer::search;
 use crate::indexer::serialize_index;
+use crate::indexer::IndexError;
 use crate::indexer::Point;
 use crate::indexer::PointOperation;
 use crate::indexer::SearchError;
@@ -244,7 +245,7 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
 #[derive(Clone, Debug)]
 pub enum TaskStatus {
     Pending(f32),
-    Error,
+    Error(String),
     Completed,
 }
 
@@ -422,6 +423,7 @@ impl Service {
         api_key: String,
     ) -> Result<(), StartIndexError> {
         let content_endpoint = self.content_endpoint.clone();
+        let internal_task_id = task_id.clone();
         if let Some(content_endpoint) = content_endpoint {
             tokio::spawn(async move {
                 let index_id = create_index_name(&domain, &commit);
@@ -436,13 +438,24 @@ impl Service {
                     .await
                     .unwrap()
                     .chunks(100);
-                    let (id, hnsw) = self
+                    match self
                         .process_operation_chunks(
                             opstream, domain, commit, previous, &index_id, &task_id, &api_key,
                         )
-                        .await;
-                    self.set_index(id, hnsw.into()).await;
-                    self.clear_pending(&index_id).await;
+                        .await
+                    {
+                        Ok((id, hnsw)) => {
+                            self.set_index(id, hnsw.into()).await;
+                            self.clear_pending(&index_id).await;
+                        }
+                        Err(err) => {
+                            self.set_task_status(
+                                internal_task_id,
+                                TaskStatus::Error(err.to_string()),
+                            )
+                            .await;
+                        }
+                    }
                 }
                 self.set_task_status(task_id, TaskStatus::Completed).await;
             });
@@ -471,6 +484,7 @@ impl Service {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn process_operation_chunks(
         self: &Arc<Self>,
         mut opstream: futures::stream::Chunks<
@@ -482,7 +496,7 @@ impl Service {
         index_id: &str,
         task_id: &str,
         api_key: &str,
-    ) -> (String, HnswIndex) {
+    ) -> Result<(String, HnswIndex), IndexError> {
         let id = create_index_name(&domain, &commit);
         let mut hnsw = self
             .load_hnsw_for_indexing(IndexIdentifier {
@@ -500,14 +514,14 @@ impl Service {
                 structs,
                 api_key,
             )
-            .await;
-            hnsw = start_indexing_from_operations(hnsw, new_ops).unwrap();
+            .await?;
+            hnsw = start_indexing_from_operations(hnsw, new_ops)?;
         }
         self.set_task_status(task_id.to_string(), TaskStatus::Pending(0.8))
             .await;
         let path = self.path.clone();
-        serialize_index(path, index_id, hnsw.clone()).unwrap();
-        (id, hnsw)
+        serialize_index(path, index_id, hnsw.clone())?;
+        Ok((id, hnsw))
     }
 
     async fn get_start_index(
@@ -526,7 +540,7 @@ impl Service {
 
     async fn get(self: Arc<Self>, req: Request<Body>) -> Result<Response<Body>, Infallible> {
         let uri = req.uri();
-        match dbg!(uri_to_spec(uri)) {
+        match uri_to_spec(uri) {
             Ok(ResourceSpec::StartIndex {
                 domain,
                 commit,
@@ -557,8 +571,9 @@ impl Service {
                         TaskStatus::Pending(f) => {
                             Ok(Response::builder().body(format!("{}", f).into()).unwrap())
                         }
-                        TaskStatus::Error => Ok(Response::builder()
-                            .body(format!("{:?}", state).into())
+                        TaskStatus::Error(msg) => Ok(Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(format!("{:?}", msg).into())
                             .unwrap()),
                         TaskStatus::Completed => {
                             Ok(Response::builder().body(format!("{}", 1.0).into()).unwrap())
