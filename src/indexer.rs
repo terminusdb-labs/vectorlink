@@ -1,6 +1,6 @@
 #![allow(unused, dead_code)]
 use crate::{
-    openai::embeddings_for,
+    openai::{embeddings_for, EmbeddingError},
     server::Operation,
     vecmath::{self, Embedding},
     vectors::{LoadedVec, VectorStore},
@@ -93,9 +93,9 @@ pub async fn operations_to_point_operations(
     vector_store: &VectorStore,
     structs: Vec<Result<Operation, std::io::Error>>,
     key: &str,
-) -> Vec<PointOperation> {
+) -> Result<Vec<PointOperation>, IndexError> {
     // Should not unwrap here -
-    let ops: Vec<Operation> = structs.into_iter().map(|ro| ro.unwrap()).collect();
+    let ops: Vec<Operation> = structs.into_iter().collect::<Result<Vec<_>, _>>()?;
     let tuples: Vec<(Op, String, String)> = ops
         .iter()
         .flat_map(|o| match o {
@@ -112,12 +112,10 @@ pub async fn operations_to_point_operations(
     let vecs: Vec<Embedding> = if strings.is_empty() {
         Vec::new()
     } else {
-        embeddings_for(key, &strings).await.unwrap()
+        embeddings_for(key, &strings).await?
     };
-    let domain = vector_store.get_domain(domain).unwrap();
-    let loaded_vecs = vector_store
-        .add_and_load_vecs(&domain, vecs.iter())
-        .unwrap();
+    let domain = vector_store.get_domain(domain)?;
+    let loaded_vecs = vector_store.add_and_load_vecs(&domain, vecs.iter())?;
     let mut new_ops: Vec<PointOperation> = zip(tuples, loaded_vecs)
         .map(|((op, _, id), vec)| match op {
             Op::Insert => PointOperation::Insert {
@@ -136,7 +134,7 @@ pub async fn operations_to_point_operations(
         })
         .collect();
     new_ops.append(&mut delete_ops);
-    new_ops
+    Ok(new_ops)
 }
 
 pub struct IndexIdentifier {
@@ -145,9 +143,14 @@ pub struct IndexIdentifier {
     pub domain: String,
 }
 
-#[derive(Debug)]
-enum IndexError {
+#[derive(Debug, Error)]
+pub enum IndexError {
+    #[error("Indexing failed")]
     Failed,
+    #[error("Indexing failed with io error: {0:?}")]
+    IoError(#[from] std::io::Error),
+    #[error("Embedding error: {0:?}")]
+    EmbeddingError(#[from] EmbeddingError),
 }
 
 /*

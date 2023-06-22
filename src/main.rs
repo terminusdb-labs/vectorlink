@@ -208,7 +208,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             for structs in opstream {
                 let structs: Vec<_> = structs.collect();
                 let new_ops =
-                    operations_to_point_operations(&domain.clone(), &store, structs, &key).await;
+                    operations_to_point_operations(&domain.clone(), &store, structs, &key).await?;
                 hnsw = start_indexing_from_operations(hnsw, new_ops).unwrap();
             }
             let index_id = create_index_name(&domain, &commit);
