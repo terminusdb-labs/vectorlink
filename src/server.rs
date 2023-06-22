@@ -484,6 +484,7 @@ impl Service {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn process_operation_chunks(
         self: &Arc<Self>,
         mut opstream: futures::stream::Chunks<
