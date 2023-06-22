@@ -37,6 +37,8 @@ enum Commands {
         #[arg(short, long)]
         content_endpoint: Option<String>,
         #[arg(short, long)]
+        user_forward_header: Option<String>,
+        #[arg(short, long)]
         directory: String,
         #[arg(short, long, default_value_t = 8080)]
         port: u16,
@@ -110,18 +112,24 @@ fn content_endpoint_or_env(c: Option<String>) -> Option<String> {
     c.or_else(|| std::env::var("TERMINUSDB_CONTENT_ENDPOINT").ok())
 }
 
+fn user_forward_header_or_env(c: Option<String>) -> String {
+    c.unwrap_or_else(|| std::env::var("TERMINUSDB_USER_FORWARD_HEADER").unwrap())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Args::parse();
     match args.command {
         Commands::Serve {
             content_endpoint,
+            user_forward_header,
             directory,
             port,
             size,
         } => {
             server::serve(
                 directory,
+                user_forward_header_or_env(user_forward_header),
                 port,
                 size,
                 content_endpoint_or_env(content_endpoint),
