@@ -505,16 +505,13 @@ impl Service {
                 previous,
             })
             .await;
+        let domain = self.vector_store.get_domain(&domain)?;
         self.set_task_status(task_id.to_string(), TaskStatus::Pending(0.3))
             .await;
         while let Some(structs) = opstream.next().await {
-            let new_ops = operations_to_point_operations(
-                &domain.clone(),
-                &self.vector_store,
-                structs,
-                api_key,
-            )
-            .await?;
+            let new_ops =
+                operations_to_point_operations(&domain, &self.vector_store, structs, api_key)
+                    .await?;
             hnsw = start_indexing_from_operations(hnsw, new_ops)?;
         }
         self.set_task_status(task_id.to_string(), TaskStatus::Pending(0.8))

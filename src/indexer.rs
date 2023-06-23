@@ -3,7 +3,7 @@ use crate::{
     openai::{embeddings_for, EmbeddingError},
     server::Operation,
     vecmath::{self, Embedding},
-    vectors::{LoadedVec, VectorStore},
+    vectors::{Domain, LoadedVec, VectorStore},
 };
 use hnsw::{Hnsw, Searcher};
 use rand_pcg::Lcg128Xsl64;
@@ -89,7 +89,7 @@ enum Op {
 }
 
 pub async fn operations_to_point_operations(
-    domain: &str,
+    domain: &Domain,
     vector_store: &VectorStore,
     structs: Vec<Result<Operation, std::io::Error>>,
     key: &str,
@@ -114,7 +114,6 @@ pub async fn operations_to_point_operations(
     } else {
         embeddings_for(key, &strings).await?
     };
-    let domain = vector_store.get_domain(domain)?;
     let loaded_vecs = vector_store.add_and_load_vecs(&domain, vecs.iter())?;
     let mut new_ops: Vec<PointOperation> = zip(tuples, loaded_vecs)
         .map(|((op, _, id), vec)| match op {
