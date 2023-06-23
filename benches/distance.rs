@@ -12,7 +12,7 @@ fn bench_cpu_distance(b: &mut Bencher) {
     let e1 = random_normalized_embedding(&mut rng);
     let e2 = random_normalized_embedding(&mut rng);
 
-    b.iter(move || normalized_cosine_distance_cpu(&e1, &e2));
+    b.iter(move || normalized_cosine_distance_scalar(&e1, &e2));
 }
 
 #[cfg(feature = "simd")]
