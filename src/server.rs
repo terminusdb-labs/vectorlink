@@ -395,6 +395,7 @@ impl Service {
     }
 
     async fn serve(self: Arc<Self>, req: Request<Body>) -> Result<Response<Body>, Infallible> {
+        eprintln!("{:?}: {:?} {:?}", chrono::offset::Local::now(), req.method(), req.uri());
         match *req.method() {
             Method::POST => self.post(req).await,
             Method::GET => self.get(req).await,
