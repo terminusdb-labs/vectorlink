@@ -584,7 +584,7 @@ impl Service {
                         }
                     }
                 } else {
-                    Ok(Response::builder().body(format!("{}", 1.0).into()).unwrap())
+                    Ok(Response::builder().status(404).body(Body::empty()).unwrap())
                 }
             }
             Ok(ResourceSpec::DuplicateCandidates {
