@@ -49,6 +49,7 @@ impl Domain {
         let mut path = dir.to_path_buf();
         let name = encode(name);
         path.push(format!("{name}.vecs"));
+        dbg!("TRYING TO OPEN PATH: ", path.clone());
         let mut write_file = File::options()
             .read(true)
             .write(true)

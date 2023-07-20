@@ -226,6 +226,7 @@ pub fn search(p: &Point, num: usize, hnsw: &HnswIndex) -> Result<Vec<PointQuery>
 pub fn serialize_index(mut path: PathBuf, name: &str, hnsw: HnswIndex) -> io::Result<()> {
     //let name = encode(name);
     path.push(format!("{name}.hnsw"));
+    dbg!("TRYING TO WRITE FILE {}", path.clone());
     let write_file = File::options().write(true).create(true).open(&path)?;
 
     let hnsw = hnsw.transform_features(|t| IndexPoint {
@@ -254,7 +255,8 @@ pub fn deserialize_index(
 ) -> io::Result<HnswIndex> {
     path.push(format!("{name}.hnsw"));
     let (domain, _) = parse_index_name(name);
-    let read_file = File::options().read(true).open(&path)?;
+    dbg!("READING HNSW FILE: {}", &path);
+    let read_file = dbg!(File::options().read(true).open(&path))?;
     let hnsw: HnswStorageIndex = serde_json::from_reader(read_file).unwrap();
     let domain = vector_store.get_domain(&domain)?;
     let hnsw = hnsw.transform_features(|t| Point::Stored {
