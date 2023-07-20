@@ -588,7 +588,6 @@ impl VectorStore {
     }
 
     pub fn get_vec(&self, domain: &Domain, index: usize) -> io::Result<Option<LoadedVec>> {
-        eprintln!("get vec {index}");
         if domain.num_vecs() <= index {
             return Ok(None);
         }
@@ -600,10 +599,8 @@ impl VectorStore {
             index: page_index,
         };
         if let Some(page) = self.arena.page_from_any(page_spec) {
-            eprintln!(" found page");
             Ok(Some(page.get_loaded_vec(index_in_page)))
         } else {
-            eprintln!(" did not find page");
             // the page is on disk but not yet in memory. Let's load it.
             match self.arena.start_loading_or_wait(page_spec) {
                 LoadState::Loading => {
