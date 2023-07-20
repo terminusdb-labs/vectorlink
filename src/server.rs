@@ -415,6 +415,25 @@ impl Service {
         }
     }
 
+    async fn start_indexing_inner(self: Arc<Self>, domain: String, commit: String, previous: Option<String>, task_id: &str, api_key: String, index_id: &str, content_endpoint: String
+    ) -> Result<(String, HnswIndex), IndexError> {
+        let internal_task_id = task_id.clone();
+        let opstream = get_operations_from_content_endpoint(
+            content_endpoint.to_string(),
+            self.user_forward_header.clone(),
+            domain.clone(),
+            commit.clone(),
+            previous.clone(),
+        )
+            .await?
+            .chunks(100);
+        self
+            .process_operation_chunks(
+                opstream, domain, commit, previous, index_id, task_id, &api_key,
+            )
+            .await
+    }
+
     fn start_indexing(
         self: Arc<Self>,
         domain: String,
@@ -429,36 +448,23 @@ impl Service {
             tokio::spawn(async move {
                 let index_id = create_index_name(&domain, &commit);
                 if self.test_and_set_pending(index_id.clone()).await {
-                    let opstream = get_operations_from_content_endpoint(
-                        content_endpoint.to_string(),
-                        self.user_forward_header.clone(),
-                        domain.clone(),
-                        commit.clone(),
-                        previous.clone(),
-                    )
-                    .await
-                    .unwrap()
-                    .chunks(100);
-                    match self
-                        .process_operation_chunks(
-                            opstream, domain, commit, previous, &index_id, &task_id, &api_key,
-                        )
-                        .await
-                    {
+                    match self.clone().start_indexing_inner(domain, commit, previous, &task_id, api_key, &index_id, content_endpoint).await {
                         Ok((id, hnsw)) => {
                             self.set_index(id, hnsw.into()).await;
+                            self.set_task_status(task_id, TaskStatus::Completed).await;
                             self.clear_pending(&index_id).await;
                         }
                         Err(err) => {
+                            eprintln!("{:?}: error while indexing: {:?}", chrono::offset::Local::now(), err);
                             self.set_task_status(
                                 internal_task_id,
                                 TaskStatus::Error(err.to_string()),
                             )
                             .await;
+                            self.clear_pending(&index_id).await;
                         }
                     }
                 }
-                self.set_task_status(task_id, TaskStatus::Completed).await;
             });
             Ok(())
         } else {
