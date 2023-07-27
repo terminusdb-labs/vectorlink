@@ -202,7 +202,13 @@ impl PointQuery {
     }
 }
 
-pub fn search(p: &Point, num: usize, hnsw: &HnswIndex) -> Result<Vec<PointQuery>, SearchError> {
+pub fn search(p: &Point, mut num: usize, hnsw: &HnswIndex) -> Result<Vec<PointQuery>, SearchError> {
+    // We need to set the number correctly
+    // to make sure we don't go out of bounds
+    let layer_len = hnsw.layer_len(0);
+    if layer_len < num {
+        num = layer_len;
+    }
     let mut output: Vec<_> = iter::repeat(Neighbor {
         index: !0,
         distance: !0,
