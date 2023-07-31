@@ -245,7 +245,8 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
 }
 
 #[derive(Clone, Debug)]
-pub enum TaskStatus {// 3.40282347E+38f32
+pub enum TaskStatus {
+    // 3.40282347E+38f32
     Pending(f32),
     Error(String),
     Completed(usize),
@@ -478,7 +479,8 @@ impl Service {
                         Ok((id, hnsw)) => {
                             let layer_len = hnsw.layer_len(0);
                             self.set_index(id, hnsw.into()).await;
-                            self.set_task_status(task_id, TaskStatus::Completed(layer_len.clone())).await;
+                            self.set_task_status(task_id, TaskStatus::Completed(layer_len.clone()))
+                                .await;
                             self.clear_pending(&index_id).await;
                         }
                         Err(err) => {
@@ -614,11 +616,11 @@ impl Service {
                             .body(format!("{:?}", msg).into())
                             .unwrap()),
                         TaskStatus::Completed(u) => {
-                            let obj= json!({"status":"Complete","indexed_documents":u});
+                            let obj = json!({"status":"Complete","indexed_documents":u});
                             Ok(Response::builder().body(obj.to_string().into()).unwrap())
 
                             // Ok(Response::builder().body(format!("{}", obj.to_string()).into()).unwrap())
-                    
+
                             //Ok(Response::builder().body(format!("{}", u).into()).unwrap())
                         }
                     }
