@@ -246,7 +246,6 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
 
 #[derive(Clone, Debug)]
 pub enum TaskStatus {
-    // 3.40282347E+38f32
     Pending(f32),
     Error(String),
     Completed(usize),
@@ -606,9 +605,7 @@ impl Service {
                 if let Some(state) = self.get_task_status(&task_id).await {
                     match state {
                         TaskStatus::Pending(f) => {
-                            // I created a json string as body
                             let obj = json!({"status":"Pending","percentage":f});
-                            //Ok(Response::builder().body(format!("{}", obj.to_string()).into()).unwrap())
                             Ok(Response::builder().body(obj.to_string().into()).unwrap())
                         }
                         TaskStatus::Error(msg) => Ok(Response::builder()
@@ -618,10 +615,6 @@ impl Service {
                         TaskStatus::Completed(u) => {
                             let obj = json!({"status":"Complete","indexed_documents":u});
                             Ok(Response::builder().body(obj.to_string().into()).unwrap())
-
-                            // Ok(Response::builder().body(format!("{}", obj.to_string()).into()).unwrap())
-
-                            //Ok(Response::builder().body(format!("{}", u).into()).unwrap())
                         }
                     }
                 } else {
