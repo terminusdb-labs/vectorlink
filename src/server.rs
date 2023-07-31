@@ -15,7 +15,9 @@ use rand::Rng;
 use regex::Regex;
 use serde::Serialize;
 use serde::{self, Deserialize};
+use serde_json::json;
 use std::collections::HashSet;
+use std::string;
 use std::{
     collections::HashMap,
     convert::Infallible,
@@ -243,10 +245,10 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
 }
 
 #[derive(Clone, Debug)]
-pub enum TaskStatus {
+pub enum TaskStatus {// 3.40282347E+38f32
     Pending(f32),
     Error(String),
-    Completed,
+    Completed(usize),
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -474,8 +476,9 @@ impl Service {
                         .await
                     {
                         Ok((id, hnsw)) => {
+                            let layer_len = hnsw.layer_len(0);
                             self.set_index(id, hnsw.into()).await;
-                            self.set_task_status(task_id, TaskStatus::Completed).await;
+                            self.set_task_status(task_id, TaskStatus::Completed(layer_len.clone())).await;
                             self.clear_pending(&index_id).await;
                         }
                         Err(err) => {
@@ -601,14 +604,22 @@ impl Service {
                 if let Some(state) = self.get_task_status(&task_id).await {
                     match state {
                         TaskStatus::Pending(f) => {
-                            Ok(Response::builder().body(format!("{}", f).into()).unwrap())
+                            // I created a json string as body
+                            let obj = json!({"status":"Pending","percentage":f});
+                            //Ok(Response::builder().body(format!("{}", obj.to_string()).into()).unwrap())
+                            Ok(Response::builder().body(obj.to_string().into()).unwrap())
                         }
                         TaskStatus::Error(msg) => Ok(Response::builder()
                             .status(StatusCode::INTERNAL_SERVER_ERROR)
                             .body(format!("{:?}", msg).into())
                             .unwrap()),
-                        TaskStatus::Completed => {
-                            Ok(Response::builder().body(format!("{}", 1.0).into()).unwrap())
+                        TaskStatus::Completed(u) => {
+                            let obj= json!({"status":"Complete","indexed_documents":u});
+                            Ok(Response::builder().body(obj.to_string().into()).unwrap())
+
+                            // Ok(Response::builder().body(format!("{}", obj.to_string()).into()).unwrap())
+                    
+                            //Ok(Response::builder().body(format!("{}", u).into()).unwrap())
                         }
                     }
                 } else {

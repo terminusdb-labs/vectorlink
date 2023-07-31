@@ -114,7 +114,7 @@ pub async fn operations_to_point_operations(
     } else {
         embeddings_for(key, &strings).await?
     };
-    let loaded_vecs = vector_store.add_and_load_vecs(&domain, vecs.iter())?;
+    let loaded_vecs: Vec<LoadedVec> = vector_store.add_and_load_vecs(&domain, vecs.iter())?;
     let mut new_ops: Vec<PointOperation> = zip(tuples, loaded_vecs)
         .map(|((op, _, id), vec)| match op {
             Op::Insert => PointOperation::Insert {
