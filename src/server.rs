@@ -15,7 +15,9 @@ use rand::Rng;
 use regex::Regex;
 use serde::Serialize;
 use serde::{self, Deserialize};
+use serde_json::json;
 use std::collections::HashSet;
+use std::string;
 use std::{
     collections::HashMap,
     convert::Infallible,
@@ -44,7 +46,7 @@ use crate::indexer::Point;
 use crate::indexer::PointOperation;
 use crate::indexer::SearchError;
 use crate::indexer::{start_indexing_from_operations, HnswIndex, IndexIdentifier, OpenAI};
-use crate::openai::embeddings_for;
+use crate::openai::{embeddings_for, EmbeddingError};
 use crate::vectors::VectorStore;
 
 #[derive(Clone, Deserialize, Debug)]
@@ -246,7 +248,7 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
 pub enum TaskStatus {
     Pending(f32),
     Error(String),
-    Completed,
+    Completed(usize),
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -323,6 +325,8 @@ enum ResponseError {
     SearchError(#[from] SearchError),
     #[error("Missing id in index {0}")]
     IdMissing(String),
+    #[error("Embedding error: {0:?}")]
+    EmbeddingError(#[from] EmbeddingError),
 }
 
 fn add_to_duplicates(duplicates: &mut HashMap<usize, usize>, id1: usize, id2: usize) {
@@ -474,8 +478,10 @@ impl Service {
                         .await
                     {
                         Ok((id, hnsw)) => {
+                            let layer_len = hnsw.layer_len(0);
                             self.set_index(id, hnsw.into()).await;
-                            self.set_task_status(task_id, TaskStatus::Completed).await;
+                            self.set_task_status(task_id, TaskStatus::Completed(layer_len.clone()))
+                                .await;
                             self.clear_pending(&index_id).await;
                         }
                         Err(err) => {
@@ -601,14 +607,16 @@ impl Service {
                 if let Some(state) = self.get_task_status(&task_id).await {
                     match state {
                         TaskStatus::Pending(f) => {
-                            Ok(Response::builder().body(format!("{}", f).into()).unwrap())
+                            let obj = json!({"status":"Pending","percentage":f});
+                            Ok(Response::builder().body(obj.to_string().into()).unwrap())
                         }
                         TaskStatus::Error(msg) => Ok(Response::builder()
                             .status(StatusCode::INTERNAL_SERVER_ERROR)
                             .body(format!("{:?}", msg).into())
                             .unwrap()),
-                        TaskStatus::Completed => {
-                            Ok(Response::builder().body(format!("{}", 1.0).into()).unwrap())
+                        TaskStatus::Completed(u) => {
+                            let obj = json!({"status":"Complete","indexed_documents":u});
+                            Ok(Response::builder().body(obj.to_string().into()).unwrap())
                         }
                     }
                 } else {
@@ -717,7 +725,8 @@ impl Service {
                 let body_bytes = hyper::body::to_bytes(body).await.unwrap();
                 let q = String::from_utf8(body_bytes.to_vec()).unwrap();
                 let api_key = get_header_value(&headers, "VECTORLINK_EMBEDDING_API_KEY");
-                let result = self.index_response(api_key, q, domain, commit, count).await;
+                let result: Result<Response<Body>, ResponseError> =
+                    self.index_response(api_key, q, domain, commit, count).await;
                 match result {
                     Ok(body) => Ok(body),
                     Err(e) => Ok(Response::builder()
@@ -743,8 +752,10 @@ impl Service {
         count: usize,
     ) -> Result<Response<Body>, ResponseError> {
         let api_key = api_key?;
-        let vec = Box::new((embeddings_for(&api_key, &[q]).await.unwrap())[0]);
-        let qp = Point::Mem { vec };
+        let vec: Vec<[f32; 1536]> = embeddings_for(&api_key, &[q]).await?;
+        let qp = Point::Mem {
+            vec: Box::new(vec[0]),
+        };
         let index_id = create_index_name(&domain, &commit);
         // if None, then return 404
         let hnsw = self.get_index(&index_id).await?;
