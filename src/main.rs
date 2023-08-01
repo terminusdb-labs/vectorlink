@@ -137,7 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .await?
         }
         Commands::Embed { key, string } => {
-            let v = openai::embeddings_for(&key_or_env(key), &[string]).await?;
+            let v: Vec<[f32; 1536]> = openai::embeddings_for(&key_or_env(key), &[string]).await?;
             eprintln!("{:?}", v);
         }
         Commands::Compare { key, s1, s2 } => {
