@@ -46,7 +46,7 @@ use crate::indexer::Point;
 use crate::indexer::PointOperation;
 use crate::indexer::SearchError;
 use crate::indexer::{start_indexing_from_operations, HnswIndex, IndexIdentifier, OpenAI};
-use crate::openai::embeddings_for;
+use crate::openai::{embeddings_for, EmbeddingError};
 use crate::vectors::VectorStore;
 
 #[derive(Clone, Deserialize, Debug)]
@@ -325,6 +325,8 @@ enum ResponseError {
     SearchError(#[from] SearchError),
     #[error("Missing id in index {0}")]
     IdMissing(String),
+    #[error("Embedding error: {0:?}")]
+    EmbeddingError(#[from] EmbeddingError),
 }
 
 fn add_to_duplicates(duplicates: &mut HashMap<usize, usize>, id1: usize, id2: usize) {
@@ -723,7 +725,8 @@ impl Service {
                 let body_bytes = hyper::body::to_bytes(body).await.unwrap();
                 let q = String::from_utf8(body_bytes.to_vec()).unwrap();
                 let api_key = get_header_value(&headers, "VECTORLINK_EMBEDDING_API_KEY");
-                let result = self.index_response(api_key, q, domain, commit, count).await;
+                let result: Result<Response<Body>, ResponseError> =
+                    self.index_response(api_key, q, domain, commit, count).await;
                 match result {
                     Ok(body) => Ok(body),
                     Err(e) => Ok(Response::builder()
@@ -749,8 +752,10 @@ impl Service {
         count: usize,
     ) -> Result<Response<Body>, ResponseError> {
         let api_key = api_key?;
-        let vec = Box::new((embeddings_for(&api_key, &[q]).await.unwrap())[0]);
-        let qp = Point::Mem { vec };
+        let vec: Vec<[f32; 1536]> = embeddings_for(&api_key, &[q]).await?;
+        let qp = Point::Mem {
+            vec: Box::new(vec[0]),
+        };
         let index_id = create_index_name(&domain, &commit);
         // if None, then return 404
         let hnsw = self.get_index(&index_id).await?;
