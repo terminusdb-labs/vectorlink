@@ -298,17 +298,34 @@ async fn get_operations_from_content_endpoint(
         .header(user_forward_header, "admin")
         .send()
         .await
-        .unwrap()
-        .bytes_stream()
-        .map_err(|e| std::io::Error::new(ErrorKind::Other, e));
-    let lines = StreamReader::new(res).lines();
-    let lines_stream = LinesStream::new(lines);
-    let fp = lines_stream.and_then(|l| {
-        future::ready(
-            serde_json::from_str(&l).map_err(|e| std::io::Error::new(ErrorKind::Other, e)),
-        )
-    });
-    Ok(fp)
+        .unwrap();
+    let status = res.status();
+    if status != StatusCode::OK {
+        let raw_s = res
+            .bytes()
+            .await
+            .map_err(|e| std::io::Error::new(ErrorKind::Other, e))?;
+        let s = String::from_utf8_lossy(&raw_s);
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!(
+                "terminusdb indexer endpoint failed with status code {}:\n{}",
+                status, s
+            ),
+        ))
+    } else {
+        let res = res
+            .bytes_stream()
+            .map_err(|e| std::io::Error::new(ErrorKind::Other, e));
+        let lines = StreamReader::new(res).lines();
+        let lines_stream = LinesStream::new(lines);
+        let fp = lines_stream.and_then(|l| {
+            future::ready(
+                serde_json::from_str(&l).map_err(|e| std::io::Error::new(ErrorKind::Other, e)),
+            )
+        });
+        Ok(fp)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -434,7 +451,7 @@ impl Service {
         index_id: &str,
         content_endpoint: String,
     ) -> Result<(String, HnswIndex), IndexError> {
-        let internal_task_id = task_id.clone();
+        let internal_task_id = task_id;
         let opstream = get_operations_from_content_endpoint(
             content_endpoint.to_string(),
             self.user_forward_header.clone(),
