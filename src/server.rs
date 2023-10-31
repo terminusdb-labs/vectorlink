@@ -97,6 +97,7 @@ enum ResourceSpec {
         commit: String,
         threshold: f32,
     },
+    GetStatistics,
 }
 
 #[derive(Debug, Error)]
@@ -149,6 +150,7 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
         static ref RE_SEARCH: Regex = Regex::new(r"^/search(/?)$").unwrap();
         static ref RE_SIMILAR: Regex = Regex::new(r"^/similar(/?)$").unwrap();
         static ref RE_DUPLICATES: Regex = Regex::new(r"^/duplicates(/?)$").unwrap();
+        static ref RE_STATISTICS: Regex = Regex::new(r"^/statistics$").unwrap();
     }
     let path = uri.path();
 
@@ -239,6 +241,8 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
             }
             _ => Err(SpecParseError::NoCommitIdOrDomain),
         }
+    } else if RE_STATISTICS.is_match(path) {
+        Ok(ResourceSpec::GetStatistics)
     } else {
         Err(SpecParseError::UnknownPath)
     }
@@ -659,6 +663,11 @@ impl Service {
                 let result = self.get_similar_documents(domain, commit, id, count).await;
                 string_response_or_error(result)
             }
+            Ok(ResourceSpec::GetStatistics) => {
+                let statistics = self.vector_store.statistics();
+                let json_string = serde_json::to_string_pretty(&statistics).map_err(|e| e.into());
+                json_response_or_error(json_string)
+            }
             Ok(_) => todo!(),
             Err(e) => Ok(Response::builder()
                 .status(StatusCode::NOT_FOUND)
@@ -794,6 +803,21 @@ fn string_response_or_error(
 ) -> Result<Response<Body>, Infallible> {
     match result {
         Ok(task_id) => Ok(Response::builder().body(task_id.into()).unwrap()),
+        Err(e) => Ok(Response::builder()
+            .status(400)
+            .body(e.to_string().into())
+            .unwrap()),
+    }
+}
+
+fn json_response_or_error(
+    result: Result<String, ResponseError>,
+) -> Result<Response<Body>, Infallible> {
+    match result {
+        Ok(task_id) => Ok(Response::builder()
+            .header("Content-Type", "application/json")
+            .body(task_id.into())
+            .unwrap()),
         Err(e) => Ok(Response::builder()
             .status(400)
             .body(e.to_string().into())
