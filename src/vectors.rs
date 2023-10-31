@@ -12,6 +12,7 @@ use std::sync::atomic::{self, AtomicUsize};
 use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 
 use lru::LruCache;
+use serde::Serialize;
 use urlencoding::encode;
 
 use crate::vecmath::{Embedding, EmbeddingBytes, EMBEDDING_BYTE_LENGTH, EMBEDDING_LENGTH};
@@ -413,7 +414,7 @@ impl PageArena {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VectorStoreStatistics {
     free: usize,
     loading: usize,
