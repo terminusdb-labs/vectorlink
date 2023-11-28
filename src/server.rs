@@ -96,6 +96,7 @@ enum ResourceSpec {
         domain: String,
         commit: String,
         threshold: f32,
+        candidates: Option<usize>,
     },
     GetStatistics,
 }
@@ -230,6 +231,7 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
         let domain = query.get("domain").map(|v| v.to_string());
         let commit = query.get("commit").map(|v| v.to_string());
         let threshold = query.get("threshold").map(|v| v.parse::<f32>().unwrap());
+        let candidates = query.get("candidates").map(|v| v.parse::<usize>().unwrap());
         match (domain, commit) {
             (Some(domain), Some(commit)) => {
                 let threshold = threshold.unwrap_or(0.0);
@@ -237,6 +239,7 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
                     domain,
                     commit,
                     threshold,
+                    candidates,
                 })
             }
             _ => Err(SpecParseError::NoCommitIdOrDomain),
@@ -648,9 +651,11 @@ impl Service {
                 domain,
                 commit,
                 threshold,
+                candidates,
             }) => {
+                let candidates = candidates.unwrap_or(2);
                 let result = self
-                    .get_duplicate_candidates(domain, commit, threshold)
+                    .get_duplicate_candidates(domain, commit, threshold, candidates)
                     .await;
                 string_response_or_error(result)
             }
@@ -715,6 +720,7 @@ impl Service {
         domain: String,
         commit: String,
         threshold: f32,
+        candidates: usize,
     ) -> Result<String, ResponseError> {
         let index_id = create_index_name(&domain, &commit);
         // if None, then return 404
@@ -723,7 +729,7 @@ impl Service {
         let elts = hnsw.layer_len(0);
         for i in 0..elts {
             let current_point = &hnsw.feature(i);
-            let results = search(current_point, 2, &hnsw)?;
+            let results = search(current_point, candidates, &hnsw)?;
             for result in results.iter() {
                 if f32::from_bits(result.distance()) < threshold {
                     add_to_duplicates(&mut duplicates, i, result.internal_id())
