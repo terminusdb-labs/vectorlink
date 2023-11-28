@@ -725,20 +725,25 @@ impl Service {
         let index_id = create_index_name(&domain, &commit);
         // if None, then return 404
         let hnsw = self.get_index(&index_id).await?;
-        let mut duplicates: HashMap<usize, usize> = HashMap::new();
+        let mut clusters: Vec<(usize, Vec<usize>)> = Vec::new();
         let elts = hnsw.layer_len(0);
         for i in 0..elts {
             let current_point = &hnsw.feature(i);
             let results = search(current_point, candidates, &hnsw)?;
             for result in results.iter() {
+                let mut cluster = Vec::new();
                 if f32::from_bits(result.distance()) < threshold {
-                    add_to_duplicates(&mut duplicates, i, result.internal_id())
-                }
+                    cluster.push(result.internal_id())
+                };
+                clusters.push((i, cluster));
             }
         }
-        let mut v: Vec<(&str, &str)> = duplicates
+        let mut v: Vec<(&str, Vec<&str>)> = clusters
             .into_iter()
-            .map(|(i, j)| (hnsw.feature(i).id(), hnsw.feature(j).id()))
+            .map(|(i, vjs)| {
+                let vns = vjs.iter().map(|j| hnsw.feature(*j).id()).collect();
+                (hnsw.feature(i).id(), vns)
+            })
             .collect();
         let result = serde_json::to_string(&v)?;
         Ok(result)
