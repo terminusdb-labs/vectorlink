@@ -732,15 +732,21 @@ impl Service {
                     return Err(results.unwrap_err());
                 }
                 let results = results.unwrap();
-                let mut cluster = Vec::new();
-                for result in results.iter() {
-                    if result.internal_id() != i {
-                        let distance = f32::from_bits(result.distance());
-                        if distance < threshold.unwrap_or(f32::MAX) {
-                            cluster.push((result.internal_id(), distance))
+                let cluster: Vec<_> = results
+                    .into_par_iter()
+                    .filter_map(|result| {
+                        if result.internal_id() != i {
+                            let distance = f32::from_bits(result.distance());
+                            if distance < threshold.unwrap_or(f32::MAX) {
+                                Some((result.internal_id(), distance))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
                         }
-                    }
-                }
+                    })
+                    .collect();
                 Ok((i, cluster))
             })
             .collect();
