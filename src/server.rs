@@ -726,15 +726,17 @@ impl Service {
         let elts = hnsw.layer_len(0);
         for i in 0..elts {
             let current_point = &hnsw.feature(i);
-            let results = search(current_point, candidates, &hnsw)?;
+            let results = search(current_point, candidates + 1, &hnsw)?;
+            let mut cluster = Vec::new();
             for result in results.iter() {
-                let mut cluster = Vec::new();
-                let distance = f32::from_bits(result.distance());
-                if distance < threshold.unwrap_or(f32::MAX) {
-                    cluster.push((result.internal_id(), distance))
+                if result.internal_id() != i {
+                    let distance = f32::from_bits(result.distance());
+                    if distance < threshold.unwrap_or(f32::MAX) {
+                        cluster.push((result.internal_id(), distance))
+                    }
                 }
-                clusters.push((i, cluster));
             }
+            clusters.push((i, cluster));
         }
         let mut v: Vec<(&str, Vec<(&str, f32)>)> = clusters
             .into_iter()
