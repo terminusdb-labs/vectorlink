@@ -12,6 +12,7 @@ use hyper::{
 use lazy_static::lazy_static;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
+use rayon::prelude::*;
 use regex::Regex;
 use serde::Serialize;
 use serde::{self, Deserialize};
@@ -689,17 +690,16 @@ impl Service {
         // if None, then return 404
         let hnsw = self.get_index(&index_id).await?;
         let elts = hnsw.layer_len(0);
-        let mut qp = None;
-        for i in 0..elts {
-            if *hnsw.feature(i).id() == id {
-                qp = Some(hnsw.feature(i))
-            }
-        }
+        let qp = (0..elts)
+            .into_par_iter()
+            .find_first(|i| hnsw.feature(*i).id() == id)
+            .map(|i| hnsw.feature(i));
+
         match qp {
             Some(qp) => {
                 let res = search(qp, count, &hnsw)?;
                 let ids: Vec<QueryResult> = res
-                    .iter()
+                    .par_iter()
                     .map(|p| QueryResult {
                         id: p.id().to_string(),
                         distance: f32::from_bits(p.distance()),
@@ -722,24 +722,31 @@ impl Service {
         let index_id = create_index_name(&domain, &commit);
         // if None, then return 404
         let hnsw = self.get_index(&index_id).await?;
-        let mut clusters: Vec<(usize, Vec<(usize, f32)>)> = Vec::new();
         let elts = hnsw.layer_len(0);
-        for i in 0..elts {
-            let current_point = &hnsw.feature(i);
-            let results = search(current_point, candidates + 1, &hnsw)?;
-            let mut cluster = Vec::new();
-            for result in results.iter() {
-                if result.internal_id() != i {
-                    let distance = f32::from_bits(result.distance());
-                    if distance < threshold.unwrap_or(f32::MAX) {
-                        cluster.push((result.internal_id(), distance))
+        let clusters: Result<Vec<(usize, Vec<(usize, f32)>)>, SearchError> = (0..elts)
+            .into_par_iter()
+            .map(|i| {
+                let current_point = &hnsw.feature(i);
+                let results = search(current_point, candidates + 1, &hnsw);
+                if results.is_err() {
+                    return Err(results.unwrap_err());
+                }
+                let results = results.unwrap();
+                let mut cluster = Vec::new();
+                for result in results.iter() {
+                    if result.internal_id() != i {
+                        let distance = f32::from_bits(result.distance());
+                        if distance < threshold.unwrap_or(f32::MAX) {
+                            cluster.push((result.internal_id(), distance))
+                        }
                     }
                 }
-            }
-            clusters.push((i, cluster));
-        }
+                Ok((i, cluster))
+            })
+            .collect();
+        let clusters = clusters?;
         let mut v: Vec<(&str, Vec<(&str, f32)>)> = clusters
-            .into_iter()
+            .into_par_iter()
             .map(|(i, vjs)| {
                 let vns = vjs
                     .iter()

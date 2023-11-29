@@ -34,6 +34,7 @@ aligned_box = "0.2"
 tiktoken-rs = "0.4"
 itertools = "0.10"
 chrono = "0.4.26"
+rayon = "1.8.0"
 
 [features]
 simd = ["packed_simd"]
