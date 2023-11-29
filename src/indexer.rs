@@ -220,7 +220,7 @@ pub fn search(p: &Point, mut num: usize, hnsw: &HnswIndex) -> Vec<PointQuery> {
     let ef = num.max(100);
     hnsw.nearest(p, ef, &mut searcher, &mut output);
     let points = output
-        .into_par_iter()
+        .into_iter()
         .map(|elt| PointQuery {
             id: elt.index,
             point: hnsw.feature(elt.index).clone(),

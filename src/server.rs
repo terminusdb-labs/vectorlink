@@ -723,32 +723,25 @@ impl Service {
         // if None, then return 404
         let hnsw = self.get_index(&index_id).await?;
         let elts = hnsw.layer_len(0);
-        let clusters: Result<Vec<(usize, Vec<(usize, f32)>)>, SearchError> = (0..elts)
+        let clusters: Vec<(usize, Vec<(usize, f32)>)> = (0..elts)
             .into_par_iter()
             .map(|i| {
                 let current_point = &hnsw.feature(i);
                 let results = search(current_point, candidates + 1, &hnsw);
-                let cluster: Vec<_> = results
-                    .into_par_iter()
-                    .filter_map(|result| {
-                        if result.internal_id() != i {
-                            let distance = f32::from_bits(result.distance());
-                            if distance < threshold.unwrap_or(f32::MAX) {
-                                Some((result.internal_id(), distance))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
+                let mut cluster = Vec::new();
+                for result in results.iter() {
+                    if result.internal_id() != i {
+                        let distance = f32::from_bits(result.distance());
+                        if distance < threshold.unwrap_or(f32::MAX) {
+                            cluster.push((result.internal_id(), distance))
                         }
-                    })
-                    .collect();
-                Ok((i, cluster))
+                    }
+                }
+                (i, cluster)
             })
             .collect();
-        let clusters = clusters?;
         let mut v: Vec<(&str, Vec<(&str, f32)>)> = clusters
-            .into_par_iter()
+            .into_iter()
             .map(|(i, vjs)| {
                 let vns = vjs
                     .iter()
