@@ -7,6 +7,7 @@ use crate::{
 };
 use hnsw::{Hnsw, Searcher};
 use rand_pcg::Lcg128Xsl64;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use space::{Metric, Neighbor};
 use std::fs::File;
@@ -202,7 +203,7 @@ impl PointQuery {
     }
 }
 
-pub fn search(p: &Point, mut num: usize, hnsw: &HnswIndex) -> Result<Vec<PointQuery>, SearchError> {
+pub fn search(p: &Point, mut num: usize, hnsw: &HnswIndex) -> Vec<PointQuery> {
     // We need to set the number correctly
     // to make sure we don't go out of bounds
     let layer_len = hnsw.layer_len(0);
@@ -218,15 +219,15 @@ pub fn search(p: &Point, mut num: usize, hnsw: &HnswIndex) -> Result<Vec<PointQu
     let mut searcher = Searcher::default();
     let ef = num.max(100);
     hnsw.nearest(p, ef, &mut searcher, &mut output);
-    let mut points = Vec::with_capacity(num);
-    for elt in output {
-        points.push(PointQuery {
+    let points = output
+        .into_par_iter()
+        .map(|elt| PointQuery {
             id: elt.index,
             point: hnsw.feature(elt.index).clone(),
             distance: elt.distance,
         })
-    }
-    Ok(points)
+        .collect();
+    points
 }
 
 pub fn serialize_index(mut path: PathBuf, name: &str, hnsw: HnswIndex) -> io::Result<()> {

@@ -697,7 +697,7 @@ impl Service {
 
         match qp {
             Some(qp) => {
-                let res = search(qp, count, &hnsw)?;
+                let res = search(qp, count, &hnsw);
                 let ids: Vec<QueryResult> = res
                     .par_iter()
                     .map(|p| QueryResult {
@@ -728,10 +728,6 @@ impl Service {
             .map(|i| {
                 let current_point = &hnsw.feature(i);
                 let results = search(current_point, candidates + 1, &hnsw);
-                if results.is_err() {
-                    return Err(results.unwrap_err());
-                }
-                let results = results.unwrap();
                 let cluster: Vec<_> = results
                     .into_par_iter()
                     .filter_map(|result| {
@@ -812,7 +808,7 @@ impl Service {
         let index_id = create_index_name(&domain, &commit);
         // if None, then return 404
         let hnsw = self.get_index(&index_id).await?;
-        let res = search(&qp, count, &hnsw).unwrap();
+        let res = search(&qp, count, &hnsw);
         let ids: Vec<QueryResult> = res
             .iter()
             .map(|p| QueryResult {
