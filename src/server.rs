@@ -95,7 +95,7 @@ enum ResourceSpec {
     DuplicateCandidates {
         domain: String,
         commit: String,
-        threshold: f32,
+        threshold: Option<f32>,
         candidates: Option<usize>,
     },
     GetStatistics,
@@ -233,15 +233,12 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
         let threshold = query.get("threshold").map(|v| v.parse::<f32>().unwrap());
         let candidates = query.get("candidates").map(|v| v.parse::<usize>().unwrap());
         match (domain, commit) {
-            (Some(domain), Some(commit)) => {
-                let threshold = threshold.unwrap_or(0.0);
-                Ok(ResourceSpec::DuplicateCandidates {
-                    domain,
-                    commit,
-                    threshold,
-                    candidates,
-                })
-            }
+            (Some(domain), Some(commit)) => Ok(ResourceSpec::DuplicateCandidates {
+                domain,
+                commit,
+                threshold,
+                candidates,
+            }),
             _ => Err(SpecParseError::NoCommitIdOrDomain),
         }
     } else if RE_STATISTICS.is_match(path) {
@@ -504,7 +501,7 @@ impl Service {
                         Ok((id, hnsw)) => {
                             let layer_len = hnsw.layer_len(0);
                             self.set_index(id, hnsw.into()).await;
-                            self.set_task_status(task_id, TaskStatus::Completed(layer_len.clone()))
+                            self.set_task_status(task_id, TaskStatus::Completed(layer_len))
                                 .await;
                             self.clear_pending(&index_id).await;
                         }
@@ -719,29 +716,33 @@ impl Service {
         self: Arc<Self>,
         domain: String,
         commit: String,
-        threshold: f32,
+        threshold: Option<f32>,
         candidates: usize,
     ) -> Result<String, ResponseError> {
         let index_id = create_index_name(&domain, &commit);
         // if None, then return 404
         let hnsw = self.get_index(&index_id).await?;
-        let mut clusters: Vec<(usize, Vec<usize>)> = Vec::new();
+        let mut clusters: Vec<(usize, Vec<(usize, f32)>)> = Vec::new();
         let elts = hnsw.layer_len(0);
         for i in 0..elts {
             let current_point = &hnsw.feature(i);
             let results = search(current_point, candidates, &hnsw)?;
             for result in results.iter() {
                 let mut cluster = Vec::new();
-                if f32::from_bits(result.distance()) < threshold {
-                    cluster.push(result.internal_id())
-                };
+                let distance = f32::from_bits(result.distance());
+                if distance < threshold.unwrap_or(f32::MAX) {
+                    cluster.push((result.internal_id(), distance))
+                }
                 clusters.push((i, cluster));
             }
         }
-        let mut v: Vec<(&str, Vec<&str>)> = clusters
+        let mut v: Vec<(&str, Vec<(&str, f32)>)> = clusters
             .into_iter()
             .map(|(i, vjs)| {
-                let vns = vjs.iter().map(|j| hnsw.feature(*j).id()).collect();
+                let vns = vjs
+                    .iter()
+                    .map(|(j, f)| (hnsw.feature(*j).id(), *f))
+                    .collect();
                 (hnsw.feature(i).id(), vns)
             })
             .collect();
