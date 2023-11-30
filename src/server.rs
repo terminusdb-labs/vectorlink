@@ -505,8 +505,12 @@ impl Service {
             tokio::spawn(async move {
                 let index_id = create_index_name(&domain, &commit);
                 if self.test_and_set_pending(index_id.clone()).await {
-                    let old_task = self.get_task_status(&internal_task_id).await.unwrap();
-                    match self
+                    self.set_task_status(
+                        internal_task_id.clone(),
+                        TaskStatus::Pending(0.0, Utc::now()),
+                    )
+                    .await;
+                    let result = self
                         .clone()
                         .start_indexing_inner(
                             domain,
@@ -517,8 +521,10 @@ impl Service {
                             &index_id,
                             content_endpoint,
                         )
-                        .await
-                    {
+                        .await;
+                    let old_task = self.get_task_status(&internal_task_id).await.unwrap();
+
+                    match result {
                         Ok((id, hnsw)) => {
                             let layer_len = hnsw.layer_len(0);
                             self.set_index(id, hnsw.into()).await;
