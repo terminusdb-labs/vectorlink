@@ -96,6 +96,7 @@ pub async fn operations_to_point_operations(
     structs: Vec<Result<Operation, std::io::Error>>,
     key: &str,
 ) -> Result<Vec<PointOperation>, IndexError> {
+    eprintln!("start operations_to_point_operations");
     // Should not unwrap here -
     let ops: Vec<Operation> = structs.into_iter().collect::<Result<Vec<_>, _>>()?;
     let tuples: Vec<(Op, String, String)> = ops
@@ -114,9 +115,12 @@ pub async fn operations_to_point_operations(
     let vecs: Vec<Embedding> = if strings.is_empty() {
         Vec::new()
     } else {
-        embeddings_for(key, &strings).await?
+        eprintln!("start embedding");
+        let result = embeddings_for(key, &strings).await?;
+        eprintln!("end embedding");
+        result
     };
-    let loaded_vecs: Vec<LoadedVec> = vector_store.add_and_load_vecs(&domain, vecs.iter())?;
+    let loaded_vecs: Vec<LoadedVec> = vector_store.add_and_load_vecs(domain, vecs.iter())?;
     let mut new_ops: Vec<PointOperation> = zip(tuples, loaded_vecs)
         .map(|((op, _, id), vec)| match op {
             Op::Insert => PointOperation::Insert {
@@ -135,6 +139,7 @@ pub async fn operations_to_point_operations(
         })
         .collect();
     new_ops.append(&mut delete_ops);
+    eprintln!("end operations_to_point_operations");
     Ok(new_ops)
 }
 
