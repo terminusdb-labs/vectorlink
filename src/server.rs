@@ -612,22 +612,24 @@ impl Service {
         let inner_domain = domain.clone();
         let inner_vector_store = self.vector_store.clone();
         let inner_api_key = api_key.to_string();
-        let mut taskstream = opstream.map(move |structs| {
-            let inner_inner_domain = inner_domain.clone();
-            let inner_inner_vector_store = inner_vector_store.clone();
-            let inner_inner_api_key = inner_api_key.clone();
-            tokio::spawn(async move {
-                operations_to_point_operations(
-                    &inner_inner_domain,
-                    &inner_inner_vector_store,
-                    structs,
-                    &inner_inner_api_key,
-                )
-                .await
+        let mut taskstream = opstream
+            .map(move |structs| {
+                let inner_inner_domain = inner_domain.clone();
+                let inner_inner_vector_store = inner_vector_store.clone();
+                let inner_inner_api_key = inner_api_key.clone();
+                tokio::spawn(async move {
+                    operations_to_point_operations(
+                        &inner_inner_domain,
+                        &inner_inner_vector_store,
+                        structs,
+                        &inner_inner_api_key,
+                    )
+                    .await
+                })
             })
-        });
+            .buffered(10);
         while let Some(task) = taskstream.next().await {
-            let new_ops = task.await?;
+            let new_ops = task?;
             hnsw = start_indexing_from_operations(hnsw, new_ops?)?;
         }
         self.set_task_status(
