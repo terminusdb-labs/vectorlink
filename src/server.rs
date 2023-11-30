@@ -285,7 +285,7 @@ pub struct Service {
     content_endpoint: Option<String>,
     user_forward_header: String,
     path: PathBuf,
-    vector_store: VectorStore,
+    vector_store: Arc<VectorStore>,
     pending: Mutex<HashSet<String>>,
     tasks: RwLock<HashMap<String, TaskStatus>>,
     indexes: RwLock<HashMap<String, Arc<HnswIndex>>>,
@@ -432,7 +432,7 @@ impl Service {
             content_endpoint,
             user_forward_header,
             path: path.clone(),
-            vector_store: VectorStore::new(path, num_bufs),
+            vector_store: Arc::new(VectorStore::new(path, num_bufs)),
             pending: Mutex::new(HashSet::new()),
             tasks: RwLock::new(HashMap::new()),
             indexes: RwLock::new(HashMap::new()),
@@ -608,11 +608,27 @@ impl Service {
             TaskStatus::Pending(0.3, old_status.start_time()),
         )
         .await;
-        while let Some(structs) = opstream.next().await {
-            let new_ops =
-                operations_to_point_operations(&domain, &self.vector_store, structs, api_key)
-                    .await?;
-            hnsw = start_indexing_from_operations(hnsw, new_ops)?;
+        // consume stream, spawn operation for each
+        let inner_domain = domain.clone();
+        let inner_vector_store = self.vector_store.clone();
+        let inner_api_key = api_key.to_string();
+        let mut taskstream = opstream.map(move |structs| {
+            let inner_inner_domain = inner_domain.clone();
+            let inner_inner_vector_store = inner_vector_store.clone();
+            let inner_inner_api_key = inner_api_key.clone();
+            tokio::spawn(async move {
+                operations_to_point_operations(
+                    &inner_inner_domain,
+                    &inner_inner_vector_store,
+                    structs,
+                    &inner_inner_api_key,
+                )
+                .await
+            })
+        });
+        while let Some(task) = taskstream.next().await {
+            let new_ops = task.await?;
+            hnsw = start_indexing_from_operations(hnsw, new_ops?)?;
         }
         self.set_task_status(
             task_id.to_string(),

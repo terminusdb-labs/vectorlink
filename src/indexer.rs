@@ -17,6 +17,7 @@ use std::{
     path::PathBuf,
 };
 use thiserror::Error;
+use tokio::task::JoinError;
 use urlencoding::{decode, encode};
 
 pub type HnswIndex = Hnsw<OpenAI, Point, Lcg128Xsl64, 24, 48>;
@@ -151,6 +152,8 @@ pub enum IndexError {
     IoError(#[from] std::io::Error),
     #[error("Embedding error: {0:?}")]
     EmbeddingError(#[from] EmbeddingError),
+    #[error("Join error: {0:?}")]
+    JoinError(#[from] JoinError),
 }
 
 /*
