@@ -1,5 +1,7 @@
 #![allow(unused, dead_code)]
 use bytes::Bytes;
+use chrono::DateTime;
+use chrono::Utc;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use hnsw::Hnsw;
@@ -251,9 +253,26 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
 
 #[derive(Clone, Debug)]
 pub enum TaskStatus {
-    Pending(f32),
-    Error(String),
-    Completed(usize),
+    Pending(f32, DateTime<Utc>),
+    Error(String, DateTime<Utc>, DateTime<Utc>),
+    Completed(usize, DateTime<Utc>, DateTime<Utc>),
+}
+
+impl TaskStatus {
+    pub fn start_time(&self) -> DateTime<Utc> {
+        match self {
+            TaskStatus::Pending(_, t) => *t,
+            TaskStatus::Error(_, t, _) => *t,
+            TaskStatus::Completed(_, t, _) => *t,
+        }
+    }
+    pub fn end_time(&self) -> Option<DateTime<Utc>> {
+        match self {
+            TaskStatus::Pending(_, _) => None,
+            TaskStatus::Error(_, _, t) => Some(*t),
+            TaskStatus::Completed(_, _, t) => Some(*t),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -486,6 +505,7 @@ impl Service {
             tokio::spawn(async move {
                 let index_id = create_index_name(&domain, &commit);
                 if self.test_and_set_pending(index_id.clone()).await {
+                    let old_task = self.get_task_status(&internal_task_id).await.unwrap();
                     match self
                         .clone()
                         .start_indexing_inner(
@@ -502,8 +522,11 @@ impl Service {
                         Ok((id, hnsw)) => {
                             let layer_len = hnsw.layer_len(0);
                             self.set_index(id, hnsw.into()).await;
-                            self.set_task_status(task_id, TaskStatus::Completed(layer_len))
-                                .await;
+                            self.set_task_status(
+                                task_id,
+                                TaskStatus::Completed(layer_len, old_task.start_time(), Utc::now()),
+                            )
+                            .await;
                             self.clear_pending(&index_id).await;
                         }
                         Err(err) => {
@@ -514,7 +537,11 @@ impl Service {
                             );
                             self.set_task_status(
                                 internal_task_id,
-                                TaskStatus::Error(err.to_string()),
+                                TaskStatus::Error(
+                                    err.to_string(),
+                                    old_task.start_time(),
+                                    Utc::now(),
+                                ),
                             )
                             .await;
                             self.clear_pending(&index_id).await;
@@ -569,16 +596,23 @@ impl Service {
             })
             .await;
         let domain = self.vector_store.get_domain(&domain)?;
-        self.set_task_status(task_id.to_string(), TaskStatus::Pending(0.3))
-            .await;
+        let old_status = self.get_task_status(task_id).await.unwrap();
+        self.set_task_status(
+            task_id.to_string(),
+            TaskStatus::Pending(0.3, old_status.start_time()),
+        )
+        .await;
         while let Some(structs) = opstream.next().await {
             let new_ops =
                 operations_to_point_operations(&domain, &self.vector_store, structs, api_key)
                     .await?;
             hnsw = start_indexing_from_operations(hnsw, new_ops)?;
         }
-        self.set_task_status(task_id.to_string(), TaskStatus::Pending(0.8))
-            .await;
+        self.set_task_status(
+            task_id.to_string(),
+            TaskStatus::Pending(0.8, old_status.start_time()),
+        )
+        .await;
         let path = self.path.clone();
         serialize_index(path, index_id, hnsw.clone())?;
         Ok((id, hnsw))
@@ -593,7 +627,7 @@ impl Service {
     ) -> Result<String, ResponseError> {
         let task_id = Service::generate_task();
         let api_key = get_header_value(req.headers(), "VECTORLINK_EMBEDDING_API_KEY")?;
-        self.set_task_status(task_id.clone(), TaskStatus::Pending(0.0));
+        self.set_task_status(task_id.clone(), TaskStatus::Pending(0.0, Utc::now()));
         self.start_indexing(domain, commit, previous, task_id.clone(), api_key)?;
         Ok(task_id)
     }
@@ -628,16 +662,24 @@ impl Service {
             Ok(ResourceSpec::CheckTask { task_id }) => {
                 if let Some(state) = self.get_task_status(&task_id).await {
                     match state {
-                        TaskStatus::Pending(f) => {
-                            let obj = json!({"status":"Pending","percentage":f});
+                        TaskStatus::Pending(f, start) => {
+                            let obj = json!({"status":"Pending","percentage":f, "start":start.to_rfc3339()});
                             Ok(Response::builder().body(obj.to_string().into()).unwrap())
                         }
-                        TaskStatus::Error(msg) => Ok(Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(format!("{:?}", msg).into())
-                            .unwrap()),
-                        TaskStatus::Completed(u) => {
-                            let obj = json!({"status":"Complete","indexed_documents":u});
+                        TaskStatus::Error(msg, start, end) => {
+                            // blah
+                            let elapsed = end - start;
+                            let obj = json!({"status":"Error", "start":start.to_rfc3339(), "end":end.to_rfc3339(), "elapsed": elapsed.to_string()});
+
+                            Ok(Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(obj.to_string().into())
+                                .unwrap())
+                        }
+
+                        TaskStatus::Completed(u, start, end) => {
+                            let elapsed = end - start;
+                            let obj = json!({"status":"Complete", "start":start.to_rfc3339(), "end":end.to_rfc3339(), "elapsed": elapsed.to_string(),"indexed_documents":u});
                             Ok(Response::builder().body(obj.to_string().into()).unwrap())
                         }
                     }
