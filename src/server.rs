@@ -340,6 +340,10 @@ async fn get_operations_from_content_endpoint(
     } else {
         let res = res
             .bytes_stream()
+            .map(|bytes| {
+                eprintln!("fetched {:?} bytes", bytes.as_ref().map(|b| b.len()));
+                bytes
+            })
             .map_err(|e| std::io::Error::new(ErrorKind::Other, e));
         let lines = StreamReader::new(res).lines();
         let lines_stream = LinesStream::new(lines);
@@ -631,6 +635,7 @@ impl Service {
         while let Some(task) = taskstream.next().await {
             let new_ops = task?;
             hnsw = start_indexing_from_operations(hnsw, new_ops?)?;
+            eprintln!("end of while");
         }
         self.set_task_status(
             task_id.to_string(),
