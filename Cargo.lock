@@ -1395,6 +1395,7 @@ dependencies = [
  "packed_simd",
  "rand",
  "rand_pcg",
+ "rayon",
  "regex",
  "reqwest",
  "serde",

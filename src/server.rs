@@ -12,6 +12,7 @@ use hyper::{
 use lazy_static::lazy_static;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
+use rayon::prelude::*;
 use regex::Regex;
 use serde::Serialize;
 use serde::{self, Deserialize};
@@ -95,7 +96,8 @@ enum ResourceSpec {
     DuplicateCandidates {
         domain: String,
         commit: String,
-        threshold: f32,
+        threshold: Option<f32>,
+        candidates: Option<usize>,
     },
     GetStatistics,
 }
@@ -230,15 +232,14 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
         let domain = query.get("domain").map(|v| v.to_string());
         let commit = query.get("commit").map(|v| v.to_string());
         let threshold = query.get("threshold").map(|v| v.parse::<f32>().unwrap());
+        let candidates = query.get("candidates").map(|v| v.parse::<usize>().unwrap());
         match (domain, commit) {
-            (Some(domain), Some(commit)) => {
-                let threshold = threshold.unwrap_or(0.0);
-                Ok(ResourceSpec::DuplicateCandidates {
-                    domain,
-                    commit,
-                    threshold,
-                })
-            }
+            (Some(domain), Some(commit)) => Ok(ResourceSpec::DuplicateCandidates {
+                domain,
+                commit,
+                threshold,
+                candidates,
+            }),
             _ => Err(SpecParseError::NoCommitIdOrDomain),
         }
     } else if RE_STATISTICS.is_match(path) {
@@ -501,7 +502,7 @@ impl Service {
                         Ok((id, hnsw)) => {
                             let layer_len = hnsw.layer_len(0);
                             self.set_index(id, hnsw.into()).await;
-                            self.set_task_status(task_id, TaskStatus::Completed(layer_len.clone()))
+                            self.set_task_status(task_id, TaskStatus::Completed(layer_len))
                                 .await;
                             self.clear_pending(&index_id).await;
                         }
@@ -648,9 +649,11 @@ impl Service {
                 domain,
                 commit,
                 threshold,
+                candidates,
             }) => {
+                let candidates = candidates.unwrap_or(2);
                 let result = self
-                    .get_duplicate_candidates(domain, commit, threshold)
+                    .get_duplicate_candidates(domain, commit, threshold, candidates)
                     .await;
                 string_response_or_error(result)
             }
@@ -687,17 +690,16 @@ impl Service {
         // if None, then return 404
         let hnsw = self.get_index(&index_id).await?;
         let elts = hnsw.layer_len(0);
-        let mut qp = None;
-        for i in 0..elts {
-            if *hnsw.feature(i).id() == id {
-                qp = Some(hnsw.feature(i))
-            }
-        }
+        let qp = (0..elts)
+            .into_par_iter()
+            .find_first(|i| hnsw.feature(*i).id() == id)
+            .map(|i| hnsw.feature(i));
+
         match qp {
             Some(qp) => {
-                let res = search(qp, count, &hnsw)?;
+                let res = search(qp, count, &hnsw);
                 let ids: Vec<QueryResult> = res
-                    .iter()
+                    .par_iter()
                     .map(|p| QueryResult {
                         id: p.id().to_string(),
                         distance: f32::from_bits(p.distance()),
@@ -714,25 +716,39 @@ impl Service {
         self: Arc<Self>,
         domain: String,
         commit: String,
-        threshold: f32,
+        threshold: Option<f32>,
+        candidates: usize,
     ) -> Result<String, ResponseError> {
         let index_id = create_index_name(&domain, &commit);
         // if None, then return 404
         let hnsw = self.get_index(&index_id).await?;
-        let mut duplicates: HashMap<usize, usize> = HashMap::new();
         let elts = hnsw.layer_len(0);
-        for i in 0..elts {
-            let current_point = &hnsw.feature(i);
-            let results = search(current_point, 2, &hnsw)?;
-            for result in results.iter() {
-                if f32::from_bits(result.distance()) < threshold {
-                    add_to_duplicates(&mut duplicates, i, result.internal_id())
+        let clusters: Vec<(usize, Vec<(usize, f32)>)> = (0..elts)
+            .into_par_iter()
+            .map(|i| {
+                let current_point = &hnsw.feature(i);
+                let results = search(current_point, candidates + 1, &hnsw);
+                let mut cluster = Vec::new();
+                for result in results.iter() {
+                    if result.internal_id() != i {
+                        let distance = f32::from_bits(result.distance());
+                        if distance < threshold.unwrap_or(f32::MAX) {
+                            cluster.push((result.internal_id(), distance))
+                        }
+                    }
                 }
-            }
-        }
-        let mut v: Vec<(&str, &str)> = duplicates
+                (i, cluster)
+            })
+            .collect();
+        let mut v: Vec<(&str, Vec<(&str, f32)>)> = clusters
             .into_iter()
-            .map(|(i, j)| (hnsw.feature(i).id(), hnsw.feature(j).id()))
+            .map(|(i, vjs)| {
+                let vns = vjs
+                    .iter()
+                    .map(|(j, f)| (hnsw.feature(*j).id(), *f))
+                    .collect();
+                (hnsw.feature(i).id(), vns)
+            })
             .collect();
         let result = serde_json::to_string(&v)?;
         Ok(result)
@@ -785,7 +801,7 @@ impl Service {
         let index_id = create_index_name(&domain, &commit);
         // if None, then return 404
         let hnsw = self.get_index(&index_id).await?;
-        let res = search(&qp, count, &hnsw).unwrap();
+        let res = search(&qp, count, &hnsw);
         let ids: Vec<QueryResult> = res
             .iter()
             .map(|p| QueryResult {
