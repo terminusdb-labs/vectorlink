@@ -150,12 +150,15 @@ impl RateLimiter {
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                     let mut budget = inner_budget.lock().await;
                     *budget += requested_budget;
-                    eprintln!("minute passed. budget now {}", *budget);
-                    Self::wakeup_existing(*budget, &mut *inner_waiters.lock().await);
+                    let budget_copy = *budget;
+                    std::mem::drop(budget);
+                    eprintln!("minute passed. budget now {}", budget_copy);
+                    Self::wakeup_existing(budget_copy, &mut *inner_waiters.lock().await);
                 });
                 return;
             } else {
                 eprintln!("rate limit time!");
+                std::mem::drop(budget);
                 let notify = Arc::new(Notify::new());
                 {
                     let mut waiters = self.waiters.lock().await;
