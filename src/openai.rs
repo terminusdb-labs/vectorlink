@@ -1,4 +1,9 @@
 #![allow(unused, dead_code)]
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
+
 use lazy_static::lazy_static;
 use reqwest::{header::HeaderValue, Body, Client, Method, Request, StatusCode, Url};
 use serde::{
@@ -7,6 +12,7 @@ use serde::{
 };
 use thiserror::Error;
 use tiktoken_rs::{cl100k_base, CoreBPE};
+use tokio::sync::{Mutex, Notify, RwLock};
 
 use crate::vecmath::Embedding;
 
@@ -106,16 +112,89 @@ fn truncated_tokens_for(s: &str) -> Vec<usize> {
     tokens
 }
 
+struct RateLimiter {
+    budget: Arc<Mutex<usize>>,
+    waiters: Arc<Mutex<VecDeque<(usize, Arc<Notify>)>>>,
+}
+
+impl RateLimiter {
+    fn new(budget: usize) -> Self {
+        Self {
+            budget: Arc::new(Mutex::new(budget)),
+            waiters: Arc::new(Mutex::new(VecDeque::new())),
+        }
+    }
+
+    async fn wakeup_existing(mut budget: usize, waiters: &mut VecDeque<(usize, Arc<Notify>)>) {
+        while waiters
+            .front()
+            .map(|(requested_budget, _)| *requested_budget < budget)
+            .unwrap_or(false)
+        {
+            eprintln!("wake up time!");
+            let (requested_budget, wakeup) = waiters.pop_front().unwrap();
+            wakeup.notify_one();
+            budget -= requested_budget;
+        }
+    }
+
+    async fn budget_tokens(&self, requested_budget: usize) {
+        loop {
+            let mut budget = self.budget.lock().await;
+            if requested_budget <= *budget {
+                *budget -= requested_budget;
+                eprintln!("requested {}. budget now {}", requested_budget, *budget);
+                let inner_budget = self.budget.clone();
+                let inner_waiters = self.waiters.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    let mut budget = inner_budget.lock().await;
+                    *budget += requested_budget;
+                    eprintln!("minute passed. budget now {}", *budget);
+                    Self::wakeup_existing(*budget, &mut *inner_waiters.lock().await);
+                });
+                return;
+            } else {
+                eprintln!("rate limit time!");
+                let notify = Arc::new(Notify::new());
+                {
+                    let mut waiters = self.waiters.lock().await;
+                    waiters.push_back((requested_budget, notify.clone()));
+                }
+                notify.notified().await;
+            }
+        }
+    }
+}
+
 pub async fn embeddings_for(
     api_key: &str,
     strings: &[String],
 ) -> Result<Vec<Embedding>, EmbeddingError> {
+    const RATE_LIMIT: usize = 1_000_000;
     lazy_static! {
         static ref ENDPOINT: Url = Url::parse("https://api.openai.com/v1/embeddings").unwrap();
         static ref CLIENT: Client = Client::new();
+        static ref LIMITERS: Arc<RwLock<HashMap<String, RateLimiter>>> =
+            Arc::new(RwLock::new(HashMap::new()));
     }
 
+    {
+        let read_guard = LIMITERS.read().await;
+        if read_guard.contains_key(api_key) {
+            std::mem::drop(read_guard);
+            let mut write_guard = LIMITERS.write().await;
+            let limiter = RateLimiter::new(RATE_LIMIT);
+            write_guard.insert(api_key.to_owned(), limiter);
+        }
+    }
+    let read_guard = LIMITERS.read().await;
+    let limiter = &read_guard[api_key];
+
     let token_lists: Vec<_> = strings.iter().map(|s| truncated_tokens_for(s)).collect();
+    limiter
+        .budget_tokens(token_lists.iter().map(|ts| ts.len()).sum())
+        .await;
 
     let mut req = Request::new(Method::POST, ENDPOINT.clone());
     let headers = req.headers_mut();
