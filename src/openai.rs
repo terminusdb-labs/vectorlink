@@ -153,7 +153,7 @@ impl RateLimiter {
                     let budget_copy = *budget;
                     std::mem::drop(budget);
                     eprintln!("minute passed. budget now {}", budget_copy);
-                    Self::wakeup_existing(budget_copy, &mut *inner_waiters.lock().await);
+                    Self::wakeup_existing(budget_copy, &mut *inner_waiters.lock().await).await;
                 });
                 return;
             } else {
