@@ -181,7 +181,7 @@ pub async fn embeddings_for(
 
     {
         let read_guard = LIMITERS.read().await;
-        if read_guard.contains_key(api_key) {
+        if !read_guard.contains_key(api_key) {
             std::mem::drop(read_guard);
             let mut write_guard = LIMITERS.write().await;
             let limiter = RateLimiter::new(RATE_LIMIT);
