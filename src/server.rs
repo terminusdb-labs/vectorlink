@@ -698,7 +698,7 @@ impl Service {
                         TaskStatus::Error(msg, start, end) => {
                             // blah
                             let elapsed = end - start;
-                            let obj = json!({"status":"Error", "start":start.to_rfc3339(), "end":end.to_rfc3339(), "elapsed": elapsed.to_string()});
+                            let obj = json!({"status":"Error", "start":start.to_rfc3339(), "end":end.to_rfc3339(), "elapsed": elapsed.to_string(), "message": msg});
 
                             Ok(Response::builder()
                                 .status(StatusCode::INTERNAL_SERVER_ERROR)
