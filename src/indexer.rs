@@ -342,7 +342,7 @@ mod tests {
         let p = Point::Mem {
             vec: Box::new(candidate_vec),
         };
-        let points = search(&p, 4, &hnsw).unwrap();
+        let points = search(&p, 4, &hnsw);
         let p1 = &points[0];
         let p2 = &points[1];
         assert_eq!(*p1.point.vec(), *e1);
