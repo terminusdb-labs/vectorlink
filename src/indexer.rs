@@ -336,8 +336,8 @@ mod tests {
         .collect();
         let hnsw = start_indexing_from_operations(Hnsw::new(OpenAI), operations).unwrap();
         let mut candidate_vec: Embedding = [0.0; 1536];
-        candidate_vec[0] = 0.707;
-        candidate_vec[1] = 0.707;
+        candidate_vec[0] = 0.8;
+        candidate_vec[1] = 0.6;
 
         let p = Point::Mem {
             vec: Box::new(candidate_vec),

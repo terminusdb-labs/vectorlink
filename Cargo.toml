@@ -18,7 +18,7 @@ regex = "1.7.3"
 lazy_static = "1.4"
 bytes = "1.4"
 clap = {version = "4.2", features=["derive"]}
-hnsw = { git = "https://github.com/terminusdb-labs/terminusdb-hnsw", branch="minmaxheap", features=["serde1"] }
+hnsw = { git = "https://github.com/terminusdb-labs/terminusdb-hnsw", branch="skiplist", features=["serde1"] }
 serde_json= "1.0"
 serde = {version="1.0", features=["derive"]}
 thiserror = "1.0"
