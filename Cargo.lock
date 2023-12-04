@@ -578,7 +578,7 @@ checksum = "d77f7ec81a6d05a3abb01ab6eb7590f6083d08449fe5a1c8b1e620283546ccb7"
 [[package]]
 name = "hnsw"
 version = "0.11.1-alpha.0"
-source = "git+https://github.com/terminusdb-labs/terminusdb-hnsw?branch=minmaxheap#e9da8520fb3dade7adae22101a22ffa9e8676ad7"
+source = "git+https://github.com/terminusdb-labs/terminusdb-hnsw?branch=minmaxheap#5a3fd3088fcf4505f5f5df548fd848d313e9b3c7"
 dependencies = [
  "ahash 0.7.7",
  "hashbrown 0.11.2",
