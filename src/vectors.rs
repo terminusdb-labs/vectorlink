@@ -103,10 +103,10 @@ impl Domain {
         let end = self.num_vecs() * std::mem::size_of::<Embedding>();
         if end <= offset {
             // this page does not exist.
-            eprintln!(
-                " :( page {} does not exist (need {} but end is {})",
-                index, offset, end
-            );
+            //eprintln!(
+            //    " :( page {} does not exist (need {} but end is {})",
+            //    index, offset, end
+            //);
             return Ok(false);
         }
         let remainder = end - offset;
@@ -115,10 +115,10 @@ impl Domain {
         } else {
             remainder
         };
-        eprintln!(
-            "loading page {}, range at offset {} of len {}",
-            index, offset, data_len
-        );
+        // eprintln!(
+        //    "loading page {}, range at offset {} of len {}",
+        //    index, offset, data_len
+        //);
         let data: &mut VectorPageBytes = unsafe { std::mem::transmute(data) };
         let data_slice = &mut data[..data_len];
         self.read_file.read_exact_at(data_slice, offset as u64)?;
@@ -132,11 +132,11 @@ impl Domain {
             "requested partial load would read past a page boundary"
         );
         let offset = index * std::mem::size_of::<VectorPage>() + offset;
-        eprintln!(
-            "loading partial range at offset {} of len {}",
-            offset,
-            data.len()
-        );
+        // eprintln!(
+        //    "loading partial range at offset {} of len {}",
+        //    offset,
+        //    data.len()
+        //);
         self.read_file.read_exact_at(data, offset as u64)
     }
 
@@ -605,7 +605,7 @@ impl VectorStore {
             // the page is on disk but not yet in memory. Let's load it.
             match self.arena.start_loading_or_wait(page_spec) {
                 LoadState::Loading => {
-                    eprintln!(" loading page");
+                    //eprintln!(" loading page");
                     // we are the loader. get a free page and load things
                     if let Some(mut page) = self.arena.free_page() {
                         match domain.load_page(page_index, &mut page) {
