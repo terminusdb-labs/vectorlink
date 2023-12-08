@@ -471,6 +471,42 @@ impl PageHandle {
 }
 
 #[derive(Clone)]
+pub struct LoadableVec {
+    store: Arc<VectorStore>,
+    domain: Arc<Domain>,
+    index: usize,
+}
+
+impl std::fmt::Debug for LoadableVec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<vec {}:{}>", self.domain.name, self.index)
+    }
+}
+
+impl PartialEq for LoadableVec {
+    fn eq(&self, other: &Self) -> bool {
+        self.domain.name == other.domain.name && self.index == other.index
+    }
+}
+
+impl LoadableVec {
+    pub fn new(store: Arc<VectorStore>, domain: Arc<Domain>, index: usize) -> Self {
+        Self {
+            store,
+            domain,
+            index,
+        }
+    }
+    pub fn get(&self) -> io::Result<Option<LoadedVec>> {
+        self.store.get_vec(&self.domain, self.index)
+    }
+
+    pub fn id(&self) -> usize {
+        self.index
+    }
+}
+
+#[derive(Clone)]
 pub struct LoadedVec {
     page: Arc<PageHandle>,
     vec: *const Embedding,
@@ -636,6 +672,23 @@ impl VectorStore {
             }
         }
     }
+
+    pub fn add_and_prepare_vecs<'a, I: Iterator<Item = &'a Embedding>>(
+        self: &Arc<Self>,
+        domain: &Arc<Domain>,
+        vecs: I,
+    ) -> io::Result<Vec<LoadableVec>> {
+        let ids = self.add_vecs(&domain, vecs)?;
+
+        let mut result = Vec::with_capacity(ids.len());
+        for id in ids.into_iter() {
+            let e = LoadableVec::new(self.clone(), domain.clone(), id);
+            result.push(e);
+        }
+
+        Ok(result)
+    }
+
     pub fn add_and_load_vecs<'a, I: Iterator<Item = &'a Embedding>>(
         &self,
         domain: &Domain,

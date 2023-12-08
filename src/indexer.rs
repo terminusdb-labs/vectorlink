@@ -3,14 +3,14 @@ use crate::{
     openai::{embeddings_for, EmbeddingError},
     server::Operation,
     vecmath::{self, Embedding},
-    vectors::{Domain, LoadedVec, VectorStore},
+    vectors::{Domain, LoadableVec, LoadedVec, VectorStore},
 };
 use hnsw::{Hnsw, Searcher};
 use rand_pcg::Lcg128Xsl64;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use space::{Metric, Neighbor};
-use std::fs::File;
+use std::{fs::File, sync::Arc};
 use std::{
     io,
     iter::{self, zip},
@@ -25,7 +25,7 @@ pub type HnswStorageIndex = Hnsw<OpenAI, IndexPoint, Lcg128Xsl64, 24, 48>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Point {
-    Stored { id: String, vec: LoadedVec },
+    Stored { id: String, vec: LoadableVec },
     Mem { vec: Box<Embedding> },
 }
 
@@ -50,10 +50,26 @@ impl Point {
         }
     }
 
-    fn vec(&self) -> &Embedding {
+    fn vec(&self) -> LoadedPoint<'_> {
         match self {
-            Point::Stored { id: _, vec } => vec,
-            Point::Mem { vec } => vec,
+            Point::Stored { id: _, vec } => LoadedPoint::Stored(vec.get().unwrap().unwrap()),
+            Point::Mem { vec } => LoadedPoint::Mem(vec),
+        }
+    }
+}
+
+pub enum LoadedPoint<'a> {
+    Stored(LoadedVec),
+    Mem(&'a Embedding),
+}
+
+impl<'a> std::ops::Deref for LoadedPoint<'a> {
+    type Target = Embedding;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            LoadedPoint::Stored(l) => l,
+            LoadedPoint::Mem(v) => v,
         }
     }
 }
@@ -66,7 +82,7 @@ impl Metric<Point> for OpenAI {
     fn distance(&self, p1: &Point, p2: &Point) -> u32 {
         let a = p1.vec();
         let b = p2.vec();
-        let f = vecmath::normalized_cosine_distance(a, b);
+        let f = vecmath::normalized_cosine_distance(&a, &b);
         f.to_bits()
     }
 }
@@ -91,8 +107,8 @@ enum Op {
 }
 
 pub async fn operations_to_point_operations(
-    domain: &Domain,
-    vector_store: &VectorStore,
+    domain: &Arc<Domain>,
+    vector_store: &Arc<VectorStore>,
     structs: Vec<Result<Operation, std::io::Error>>,
     key: &str,
 ) -> Result<Vec<PointOperation>, IndexError> {
@@ -120,7 +136,7 @@ pub async fn operations_to_point_operations(
         eprintln!("end embedding");
         result
     };
-    let loaded_vecs: Vec<LoadedVec> = vector_store.add_and_load_vecs(domain, vecs.iter())?;
+    let loaded_vecs: Vec<LoadableVec> = vector_store.add_and_prepare_vecs(domain, vecs.iter())?;
     let mut new_ops: Vec<PointOperation> = zip(tuples, loaded_vecs)
         .map(|((op, _, id), vec)| match op {
             Op::Insert => PointOperation::Insert {
@@ -265,7 +281,7 @@ pub fn parse_index_name(name: &str) -> (String, String) {
 pub fn deserialize_index(
     path: &mut PathBuf,
     name: &str,
-    vector_store: &VectorStore,
+    vector_store: &Arc<VectorStore>,
 ) -> io::Result<HnswIndex> {
     path.push(format!("{name}.hnsw"));
     let (domain, _) = parse_index_name(name);
@@ -274,7 +290,7 @@ pub fn deserialize_index(
     let domain = vector_store.get_domain(&domain)?;
     let hnsw = hnsw.transform_features(|t| Point::Stored {
         id: t.id,
-        vec: vector_store.get_vec(&domain, t.index).unwrap().unwrap(),
+        vec: LoadableVec::new(vector_store.clone(), domain.clone(), t.index),
     });
     Ok(hnsw)
 }

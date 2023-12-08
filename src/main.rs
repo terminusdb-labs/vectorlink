@@ -1,5 +1,6 @@
 use std::io::ErrorKind;
 use std::path::Path;
+use std::sync::Arc;
 
 use clap::CommandFactory;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -199,7 +200,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let path = Path::new(&input);
             let dirpath = Path::new(&directory);
             let mut hnsw: HnswIndex = Hnsw::new(OpenAI);
-            let store = VectorStore::new(dirpath, size);
+            let store = Arc::new(VectorStore::new(dirpath, size));
             let resolved_domain = store.get_domain(&domain)?;
 
             let f = File::options().read(true).open(path)?;
