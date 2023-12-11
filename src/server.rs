@@ -253,24 +253,35 @@ fn uri_to_spec(uri: &Uri) -> Result<ResourceSpec, SpecParseError> {
 
 #[derive(Clone, Debug)]
 pub enum TaskStatus {
-    Pending(f32, DateTime<Utc>),
-    Error(String, DateTime<Utc>, DateTime<Utc>),
-    Completed(usize, DateTime<Utc>, DateTime<Utc>),
+    Pending {
+        progress: f32,
+        start_time: DateTime<Utc>,
+    },
+    Error {
+        message: String,
+        start_time: DateTime<Utc>,
+        end_time: DateTime<Utc>,
+    },
+    Completed {
+        indexed_documents: usize,
+        start_time: DateTime<Utc>,
+        end_time: DateTime<Utc>,
+    },
 }
 
 impl TaskStatus {
     pub fn start_time(&self) -> DateTime<Utc> {
         match self {
-            TaskStatus::Pending(_, t) => *t,
-            TaskStatus::Error(_, t, _) => *t,
-            TaskStatus::Completed(_, t, _) => *t,
+            TaskStatus::Pending { start_time, .. } => *start_time,
+            TaskStatus::Error { start_time, .. } => *start_time,
+            TaskStatus::Completed { start_time, .. } => *start_time,
         }
     }
     pub fn end_time(&self) -> Option<DateTime<Utc>> {
         match self {
-            TaskStatus::Pending(_, _) => None,
-            TaskStatus::Error(_, _, t) => Some(*t),
-            TaskStatus::Completed(_, _, t) => Some(*t),
+            TaskStatus::Pending { .. } => None,
+            TaskStatus::Error { end_time, .. } => Some(*end_time),
+            TaskStatus::Completed { end_time, .. } => Some(*end_time),
         }
     }
 }
@@ -511,7 +522,10 @@ impl Service {
                 if self.test_and_set_pending(index_id.clone()).await {
                     self.set_task_status(
                         internal_task_id.clone(),
-                        TaskStatus::Pending(0.0, Utc::now()),
+                        TaskStatus::Pending {
+                            progress: 0.0,
+                            start_time: Utc::now(),
+                        },
                     )
                     .await;
                     let result = self
@@ -534,7 +548,11 @@ impl Service {
                             self.set_index(id, hnsw.into()).await;
                             self.set_task_status(
                                 task_id,
-                                TaskStatus::Completed(layer_len, old_task.start_time(), Utc::now()),
+                                TaskStatus::Completed {
+                                    indexed_documents: layer_len,
+                                    start_time: old_task.start_time(),
+                                    end_time: Utc::now(),
+                                },
                             )
                             .await;
                             self.clear_pending(&index_id).await;
@@ -547,11 +565,11 @@ impl Service {
                             );
                             self.set_task_status(
                                 internal_task_id,
-                                TaskStatus::Error(
-                                    err.to_string(),
-                                    old_task.start_time(),
-                                    Utc::now(),
-                                ),
+                                TaskStatus::Error {
+                                    message: err.to_string(),
+                                    start_time: old_task.start_time(),
+                                    end_time: Utc::now(),
+                                },
                             )
                             .await;
                             self.clear_pending(&index_id).await;
@@ -609,7 +627,10 @@ impl Service {
         let old_status = self.get_task_status(task_id).await.unwrap();
         self.set_task_status(
             task_id.to_string(),
-            TaskStatus::Pending(0.3, old_status.start_time()),
+            TaskStatus::Pending {
+                progress: 0.3,
+                start_time: old_status.start_time(),
+            },
         )
         .await;
         // consume stream, spawn operation for each
@@ -639,7 +660,10 @@ impl Service {
         }
         self.set_task_status(
             task_id.to_string(),
-            TaskStatus::Pending(0.8, old_status.start_time()),
+            TaskStatus::Pending {
+                progress: 0.8,
+                start_time: old_status.start_time(),
+            },
         )
         .await;
         let path = self.path.clone();
@@ -656,7 +680,13 @@ impl Service {
     ) -> Result<String, ResponseError> {
         let task_id = Service::generate_task();
         let api_key = get_header_value(req.headers(), "VECTORLINK_EMBEDDING_API_KEY")?;
-        self.set_task_status(task_id.clone(), TaskStatus::Pending(0.0, Utc::now()));
+        self.set_task_status(
+            task_id.clone(),
+            TaskStatus::Pending {
+                progress: 0.0,
+                start_time: Utc::now(),
+            },
+        );
         self.start_indexing(domain, commit, previous, task_id.clone(), api_key)?;
         Ok(task_id)
     }
@@ -691,14 +721,21 @@ impl Service {
             Ok(ResourceSpec::CheckTask { task_id }) => {
                 if let Some(state) = self.get_task_status(&task_id).await {
                     match state {
-                        TaskStatus::Pending(f, start) => {
-                            let obj = json!({"status":"Pending","percentage":f, "start":start.to_rfc3339()});
+                        TaskStatus::Pending {
+                            progress,
+                            start_time,
+                        } => {
+                            let obj = json!({"status":"Pending","percentage":progress, "start":start_time.to_rfc3339()});
                             Ok(Response::builder().body(obj.to_string().into()).unwrap())
                         }
-                        TaskStatus::Error(msg, start, end) => {
+                        TaskStatus::Error {
+                            message,
+                            start_time,
+                            end_time,
+                        } => {
                             // blah
-                            let elapsed = end - start;
-                            let obj = json!({"status":"Error", "start":start.to_rfc3339(), "end":end.to_rfc3339(), "elapsed": elapsed.to_string(), "message": msg});
+                            let elapsed = end_time - start_time;
+                            let obj = json!({"status":"Error", "start":start_time.to_rfc3339(), "end":end_time.to_rfc3339(), "elapsed": elapsed.to_string(), "message": message});
 
                             Ok(Response::builder()
                                 .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -706,9 +743,13 @@ impl Service {
                                 .unwrap())
                         }
 
-                        TaskStatus::Completed(u, start, end) => {
-                            let elapsed = end - start;
-                            let obj = json!({"status":"Complete", "start":start.to_rfc3339(), "end":end.to_rfc3339(), "elapsed": elapsed.to_string(),"indexed_documents":u});
+                        TaskStatus::Completed {
+                            indexed_documents,
+                            start_time,
+                            end_time,
+                        } => {
+                            let elapsed = end_time - start_time;
+                            let obj = json!({"status":"Complete", "start":start_time.to_rfc3339(), "end":end_time.to_rfc3339(), "elapsed": elapsed.to_string(),"indexed_documents":indexed_documents});
                             Ok(Response::builder().body(obj.to_string().into()).unwrap())
                         }
                     }
