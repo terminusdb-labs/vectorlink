@@ -2,6 +2,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     sync::Arc,
+    time::Duration,
 };
 
 use lazy_static::lazy_static;
@@ -170,6 +171,7 @@ impl RateLimiter {
     }
 }
 
+const MAX_FAILURE_COUNT: usize = 5;
 pub async fn embeddings_for(
     api_key: &str,
     strings: &[String],
@@ -199,32 +201,46 @@ pub async fn embeddings_for(
         .budget_tokens(token_lists.iter().map(|ts| ts.len()).sum())
         .await;
 
-    let mut req = Request::new(Method::POST, ENDPOINT.clone());
-    let headers = req.headers_mut();
-    headers.insert("Content-Type", HeaderValue::from_static("application/json"));
-    headers.insert(
-        "Authorization",
-        HeaderValue::from_str(&format!("Bearer {api_key}")).unwrap(),
-    );
-
     let body = EmbeddingRequest {
         model: "text-embedding-ada-002",
         input: &token_lists,
         user: None,
     };
-    let body_vec = serde_json::to_vec(&body).unwrap();
-    let body: Body = body_vec.into();
 
-    *req.body_mut() = Some(body); // once told me the world is gonna roll me
+    let response: EmbeddingResponse;
+    let mut failure_count = 0;
+    loop {
+        let mut req = Request::new(Method::POST, ENDPOINT.clone());
+        let headers = req.headers_mut();
+        headers.insert("Content-Type", HeaderValue::from_static("application/json"));
+        headers.insert(
+            "Authorization",
+            HeaderValue::from_str(&format!("Bearer {api_key}")).unwrap(),
+        );
+        let body_vec = serde_json::to_vec(&body).unwrap();
+        let body: Body = body_vec.into();
+        *req.body_mut() = Some(body); // once told me the world is gonna roll me
 
-    let response = CLIENT.execute(req).await?;
-    let status = response.status();
-    let response_bytes = response.bytes().await?;
-    if status != StatusCode::OK {
-        let body = String::from_utf8_lossy(&response_bytes).to_string();
-        return Err(EmbeddingError::BadStatus(status, body));
+        let client_response = CLIENT.execute(req).await?;
+        let status = client_response.status();
+        let response_bytes = client_response.bytes().await?;
+        if status != StatusCode::OK {
+            let body = String::from_utf8_lossy(&response_bytes).to_string();
+            if failure_count == MAX_FAILURE_COUNT {
+                return Err(EmbeddingError::BadStatus(status, body));
+            } else {
+                failure_count += 1;
+                eprintln!(
+                    "encountered failure {failure_count} while calling openai. retrying..\n{body}"
+                );
+                let backoff = 2_u64.pow(failure_count as u32);
+                tokio::time::sleep(Duration::from_secs(backoff));
+                continue;
+            }
+        }
+        response = serde_json::from_slice(&response_bytes)?;
+        break;
     }
-    let response: EmbeddingResponse = serde_json::from_slice(&response_bytes)?;
     let mut result = Vec::with_capacity(strings.len());
     for embedding in response.data {
         result.push(embedding.embedding);
