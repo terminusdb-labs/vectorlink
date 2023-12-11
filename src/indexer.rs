@@ -95,7 +95,7 @@ pub async fn operations_to_point_operations(
     vector_store: &VectorStore,
     structs: Vec<Result<Operation, std::io::Error>>,
     key: &str,
-) -> Result<Vec<PointOperation>, IndexError> {
+) -> Result<(Vec<PointOperation>, usize), IndexError> {
     eprintln!("start operations_to_point_operations");
     // Should not unwrap here -
     let ops: Vec<Operation> = structs.into_iter().collect::<Result<Vec<_>, _>>()?;
@@ -112,15 +112,15 @@ pub async fn operations_to_point_operations(
         })
         .collect();
     let strings: Vec<String> = tuples.iter().map(|(_, s, _)| s.to_string()).collect();
-    let vecs: Vec<Embedding> = if strings.is_empty() {
-        Vec::new()
+    let vecs: (Vec<Embedding>, usize) = if strings.is_empty() {
+        (Vec::new(), 0)
     } else {
         eprintln!("start embedding");
         let result = embeddings_for(key, &strings).await?;
         eprintln!("end embedding");
         result
     };
-    let loaded_vecs: Vec<LoadedVec> = vector_store.add_and_load_vecs(domain, vecs.iter())?;
+    let loaded_vecs: Vec<LoadedVec> = vector_store.add_and_load_vecs(domain, vecs.0.iter())?;
     let mut new_ops: Vec<PointOperation> = zip(tuples, loaded_vecs)
         .map(|((op, _, id), vec)| match op {
             Op::Insert => PointOperation::Insert {
@@ -140,7 +140,7 @@ pub async fn operations_to_point_operations(
         .collect();
     new_ops.append(&mut delete_ops);
     eprintln!("end operations_to_point_operations");
-    Ok(new_ops)
+    Ok((new_ops, vecs.1))
 }
 
 pub struct IndexIdentifier {

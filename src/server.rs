@@ -21,6 +21,7 @@ use serde::{self, Deserialize};
 use serde_json::json;
 use std::collections::HashSet;
 use std::string;
+use std::sync::atomic::AtomicUsize;
 use std::{
     collections::HashMap,
     convert::Infallible,
@@ -256,16 +257,19 @@ pub enum TaskStatus {
     Pending {
         progress: f32,
         start_time: DateTime<Utc>,
+        num_retries: usize,
     },
     Error {
         message: String,
         start_time: DateTime<Utc>,
         end_time: DateTime<Utc>,
+        num_retries: usize,
     },
     Completed {
         indexed_documents: usize,
         start_time: DateTime<Utc>,
         end_time: DateTime<Utc>,
+        num_retries: usize,
     },
 }
 
@@ -282,6 +286,13 @@ impl TaskStatus {
             TaskStatus::Pending { .. } => None,
             TaskStatus::Error { end_time, .. } => Some(*end_time),
             TaskStatus::Completed { end_time, .. } => Some(*end_time),
+        }
+    }
+    pub fn num_retries(&self) -> usize {
+        match self {
+            TaskStatus::Pending { num_retries, .. } => *num_retries,
+            TaskStatus::Error { num_retries, .. } => *num_retries,
+            TaskStatus::Completed { num_retries, .. } => *num_retries,
         }
     }
 }
@@ -525,6 +536,7 @@ impl Service {
                         TaskStatus::Pending {
                             progress: 0.0,
                             start_time: Utc::now(),
+                            num_retries: 0,
                         },
                     )
                     .await;
@@ -552,6 +564,7 @@ impl Service {
                                     indexed_documents: layer_len,
                                     start_time: old_task.start_time(),
                                     end_time: Utc::now(),
+                                    num_retries: old_task.num_retries(),
                                 },
                             )
                             .await;
@@ -569,6 +582,7 @@ impl Service {
                                     message: err.to_string(),
                                     start_time: old_task.start_time(),
                                     end_time: Utc::now(),
+                                    num_retries: old_task.num_retries(),
                                 },
                             )
                             .await;
@@ -630,6 +644,7 @@ impl Service {
             TaskStatus::Pending {
                 progress: 0.3,
                 start_time: old_status.start_time(),
+                num_retries: old_status.num_retries(),
             },
         )
         .await;
@@ -654,8 +669,19 @@ impl Service {
             })
             .buffered(10);
         while let Some(task) = taskstream.next().await {
-            let new_ops = task?;
-            hnsw = start_indexing_from_operations(hnsw, new_ops?)?;
+            let (new_ops, failures) = task??;
+            if failures != 0 {
+                let old_status = self.get_task_status(task_id).await.unwrap();
+                self.set_task_status(
+                    task_id.to_string(),
+                    TaskStatus::Pending {
+                        progress: 0.3,
+                        start_time: old_status.start_time(),
+                        num_retries: old_status.num_retries() + failures,
+                    },
+                );
+            }
+            hnsw = start_indexing_from_operations(hnsw, new_ops)?;
             eprintln!("end of while");
         }
         self.set_task_status(
@@ -663,6 +689,7 @@ impl Service {
             TaskStatus::Pending {
                 progress: 0.8,
                 start_time: old_status.start_time(),
+                num_retries: old_status.num_retries(),
             },
         )
         .await;
@@ -685,6 +712,7 @@ impl Service {
             TaskStatus::Pending {
                 progress: 0.0,
                 start_time: Utc::now(),
+                num_retries: 0,
             },
         );
         self.start_indexing(domain, commit, previous, task_id.clone(), api_key)?;
@@ -724,18 +752,20 @@ impl Service {
                         TaskStatus::Pending {
                             progress,
                             start_time,
+                            num_retries,
                         } => {
-                            let obj = json!({"status":"Pending","percentage":progress, "start":start_time.to_rfc3339()});
+                            let obj = json!({"status":"Pending","percentage":progress, "start":start_time.to_rfc3339(), "retries": num_retries});
                             Ok(Response::builder().body(obj.to_string().into()).unwrap())
                         }
                         TaskStatus::Error {
                             message,
                             start_time,
                             end_time,
+                            num_retries,
                         } => {
                             // blah
                             let elapsed = end_time - start_time;
-                            let obj = json!({"status":"Error", "start":start_time.to_rfc3339(), "end":end_time.to_rfc3339(), "elapsed": elapsed.to_string(), "message": message});
+                            let obj = json!({"status":"Error", "start":start_time.to_rfc3339(), "end":end_time.to_rfc3339(), "elapsed": elapsed.to_string(), "retries": num_retries, "message": message});
 
                             Ok(Response::builder()
                                 .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -747,9 +777,10 @@ impl Service {
                             indexed_documents,
                             start_time,
                             end_time,
+                            num_retries,
                         } => {
                             let elapsed = end_time - start_time;
-                            let obj = json!({"status":"Complete", "start":start_time.to_rfc3339(), "end":end_time.to_rfc3339(), "elapsed": elapsed.to_string(),"indexed_documents":indexed_documents});
+                            let obj = json!({"status":"Complete", "start":start_time.to_rfc3339(), "end":end_time.to_rfc3339(), "elapsed": elapsed.to_string(),"indexed_documents":indexed_documents, "retries":num_retries});
                             Ok(Response::builder().body(obj.to_string().into()).unwrap())
                         }
                     }
@@ -906,7 +937,7 @@ impl Service {
         count: usize,
     ) -> Result<Response<Body>, ResponseError> {
         let api_key = api_key?;
-        let vec: Vec<[f32; 1536]> = embeddings_for(&api_key, &[q]).await?;
+        let vec: Vec<[f32; 1536]> = embeddings_for(&api_key, &[q]).await?.0;
         let qp = Point::Mem {
             vec: Box::new(vec[0]),
         };

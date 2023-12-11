@@ -188,7 +188,7 @@ const MAX_FAILURE_COUNT: usize = 5;
 pub async fn embeddings_for(
     api_key: &str,
     strings: &[String],
-) -> Result<Vec<Embedding>, EmbeddingError> {
+) -> Result<(Vec<Embedding>, usize), EmbeddingError> {
     const RATE_LIMIT: usize = 1_000_000;
     lazy_static! {
         static ref ENDPOINT: Url = Url::parse("https://api.openai.com/v1/embeddings").unwrap();
@@ -272,5 +272,5 @@ pub async fn embeddings_for(
         result.push(embedding.embedding);
     }
 
-    Ok(result)
+    Ok((result, failure_count))
 }

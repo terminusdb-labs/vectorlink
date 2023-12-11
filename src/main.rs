@@ -137,11 +137,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .await?
         }
         Commands::Embed { key, string } => {
-            let v: Vec<[f32; 1536]> = openai::embeddings_for(&key_or_env(key), &[string]).await?;
+            let v: Vec<[f32; 1536]> = openai::embeddings_for(&key_or_env(key), &[string]).await?.0;
             eprintln!("{:?}", v);
         }
         Commands::Compare { key, s1, s2 } => {
-            let v = openai::embeddings_for(&key_or_env(key), &[s1, s2]).await?;
+            let v = openai::embeddings_for(&key_or_env(key), &[s1, s2]).await?.0;
             let p1 = Point::Mem {
                 vec: Box::new(v[0]),
             };
@@ -160,7 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             s2,
             variant,
         } => {
-            let v = openai::embeddings_for(&key_or_env(key), &[s1, s2]).await?;
+            let v = openai::embeddings_for(&key_or_env(key), &[s1, s2]).await?.0;
             let p1 = &v[0];
             let p2 = &v[1];
             let distance = match variant {
@@ -180,7 +180,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     "queen".to_string(),
                 ],
             )
-            .await?;
+            .await?
+            .0;
             let mut calculated = empty_embedding();
             for (i, calculated) in calculated.iter_mut().enumerate() {
                 *calculated = v[0][i] - v[1][i] + v[2][i];
@@ -217,7 +218,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             for structs in opstream {
                 let structs: Vec<_> = structs.collect();
                 let new_ops =
-                    operations_to_point_operations(&resolved_domain, &store, structs, &key).await?;
+                    operations_to_point_operations(&resolved_domain, &store, structs, &key)
+                        .await?
+                        .0;
                 hnsw = start_indexing_from_operations(hnsw, new_ops).unwrap();
             }
             let index_id = create_index_name(&domain, &commit);
