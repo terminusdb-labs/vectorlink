@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use bytes::Bytes;
 use lazy_static::lazy_static;
 use reqwest::{header::HeaderValue, Body, Client, Method, Request, StatusCode, Url};
 use serde::{
@@ -88,6 +89,8 @@ pub enum EmbeddingError {
     ReqwestError(#[from] reqwest::Error),
     #[error("response had bad status code: {}", .0)]
     BadStatus(StatusCode, String),
+    #[error("incomplete body")]
+    IncompleteBody,
 
     #[error("error while parsing json: {0:?}")]
     BadJson(#[from] serde_json::Error),
@@ -171,6 +174,16 @@ impl RateLimiter {
     }
 }
 
+async fn execute_request_and_get_bytes(
+    client: &Client,
+    req: Request,
+) -> Result<(StatusCode, Bytes), reqwest::Error> {
+    let client_response = client.execute(req).await?;
+    let status = client_response.status();
+    let bytes = client_response.bytes().await?;
+    Ok((status, bytes))
+}
+
 const MAX_FAILURE_COUNT: usize = 5;
 pub async fn embeddings_for(
     api_key: &str,
@@ -221,9 +234,22 @@ pub async fn embeddings_for(
         let body: Body = body_vec.into();
         *req.body_mut() = Some(body); // once told me the world is gonna roll me
 
-        let client_response = CLIENT.execute(req).await?;
-        let status = client_response.status();
-        let response_bytes = client_response.bytes().await?;
+        let result = execute_request_and_get_bytes(&CLIENT, req).await;
+        if result.is_err() {
+            // something
+            if failure_count == MAX_FAILURE_COUNT {
+                return Err(EmbeddingError::IncompleteBody);
+            } else {
+                failure_count += 1;
+                eprintln!(
+                    "encountered failure {failure_count} while calling openai. retrying.. (incomplete response)"
+                );
+                let backoff = 2_u64.pow(failure_count as u32);
+                tokio::time::sleep(Duration::from_secs(backoff));
+                continue;
+            }
+        }
+        let (status, response_bytes) = result.unwrap();
         if status != StatusCode::OK {
             let body = String::from_utf8_lossy(&response_bytes).to_string();
             if failure_count == MAX_FAILURE_COUNT {
