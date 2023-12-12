@@ -1405,40 +1405,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "terminusdb-semantic-indexer"
-version = "0.1.0"
-dependencies = [
- "aligned_box",
- "bytes",
- "chrono",
- "clap",
- "futures",
- "hnsw",
- "hyper",
- "itertools",
- "lazy_static",
- "lru",
- "packed_simd",
- "rand",
- "rand_pcg",
- "rayon",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "simdeez",
- "space",
- "tempfile",
- "thiserror",
- "tiktoken-rs",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "url",
- "urlencoding",
-]
-
-[[package]]
 name = "thiserror"
 version = "1.0.50"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1633,6 +1599,40 @@ name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
+
+[[package]]
+name = "vectorlink"
+version = "0.1.0"
+dependencies = [
+ "aligned_box",
+ "bytes",
+ "chrono",
+ "clap",
+ "futures",
+ "hnsw",
+ "hyper",
+ "itertools",
+ "lazy_static",
+ "lru",
+ "packed_simd",
+ "rand",
+ "rand_pcg",
+ "rayon",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "simdeez",
+ "space",
+ "tempfile",
+ "thiserror",
+ "tiktoken-rs",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "url",
+ "urlencoding",
+]
 
 [[package]]
 name = "version_check"

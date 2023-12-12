@@ -1,6 +1,14 @@
 use std::io::ErrorKind;
 use std::path::Path;
 
+mod batch;
+mod indexer;
+mod openai;
+mod server;
+mod vecmath;
+mod vectors;
+
+use batch::index_from_operations_file;
 use clap::CommandFactory;
 use clap::{Parser, Subcommand, ValueEnum};
 use hnsw::Hnsw;
@@ -8,21 +16,17 @@ use indexer::serialize_index;
 use indexer::start_indexing_from_operations;
 use indexer::Point;
 use indexer::{operations_to_point_operations, OpenAI};
+use itertools::Itertools;
 use server::Operation;
 use space::Metric;
 use std::fs::File;
 use std::io::{self, BufRead};
+
 use {
     indexer::{create_index_name, HnswIndex},
     vecmath::empty_embedding,
     vectors::VectorStore,
 };
-mod indexer;
-mod openai;
-mod server;
-mod vecmath;
-mod vectors;
-use itertools::Itertools;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -46,6 +50,20 @@ enum Commands {
         size: usize,
     },
     Load {
+        #[arg(short, long)]
+        key: Option<String>,
+        #[arg(short, long)]
+        commit: String,
+        #[arg(long)]
+        domain: String,
+        #[arg(short, long)]
+        directory: String,
+        #[arg(short, long)]
+        input: String,
+        #[arg(short, long, default_value_t = 10000)]
+        size: usize,
+    },
+    Load2 {
         #[arg(short, long)]
         key: Option<String>,
         #[arg(short, long)]
@@ -225,6 +243,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
             let index_id = create_index_name(&domain, &commit);
             serialize_index(dirpath.to_path_buf(), &index_id, hnsw.clone()).unwrap();
+        }
+        Commands::Load2 {
+            key,
+            domain,
+            directory,
+            input,
+            ..
+        } => {
+            let key = key_or_env(key);
+            index_from_operations_file(&key, input, directory, &domain)
+                .await
+                .unwrap()
         }
     }
 

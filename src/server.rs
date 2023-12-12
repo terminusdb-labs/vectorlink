@@ -62,6 +62,21 @@ pub enum Operation {
     Error { message: String },
 }
 
+impl Operation {
+    pub fn has_string(&self) -> bool {
+        matches!(self, Operation::Inserted { .. } | Operation::Changed { .. })
+    }
+
+    pub fn string(self) -> Option<String> {
+        match self {
+            Operation::Inserted { string, id } => Some(string),
+            Operation::Changed { string, id } => Some(string),
+            Operation::Deleted { id } => None,
+            Operation::Error { message } => None,
+        }
+    }
+}
+
 #[derive(Deserialize, Debug)]
 struct IndexRequest {
     domain: String,
