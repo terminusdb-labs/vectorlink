@@ -56,6 +56,7 @@ pub async fn vectorize_from_operations<
 ) -> Result<usize, VectorizationError> {
     let mut progress_file = OpenOptions::new()
         .create(true)
+        .read(true)
         .write(true)
         .open(progress_file_path)
         .await?;
@@ -75,8 +76,7 @@ pub async fn vectorize_from_operations<
 
     let mut failures = 0;
     eprintln!("starting indexing at {offset}");
-    #[allow(for_loops_over_fallibles)]
-    for chunk in filtered_op_stream.next().await {
+    while let Some(chunk) = filtered_op_stream.next().await {
         let chunk: Result<Vec<String>, _> = chunk
             .into_iter()
             .map(|o| o.map(|o| o.string().unwrap()))
@@ -95,9 +95,9 @@ pub async fn vectorize_from_operations<
     Ok(failures)
 }
 
-async fn get_operations_from_file<'a>(
-    file: &'a mut File,
-) -> io::Result<impl Stream<Item = io::Result<Operation>> + 'a> {
+async fn get_operations_from_file(
+    file: &mut File,
+) -> io::Result<impl Stream<Item = io::Result<Operation>> + '_> {
     file.seek(SeekFrom::Start(0)).await?;
 
     let buf_reader = BufReader::new(file);
