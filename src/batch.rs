@@ -16,6 +16,7 @@ use tokio_stream::wrappers::LinesStream;
 use crate::{
     openai::{embeddings_for, EmbeddingError},
     server::Operation,
+    vecmath::Embedding,
 };
 
 #[derive(Error, Debug)]
@@ -26,23 +27,20 @@ pub enum VectorizationError {
     Io(#[from] io::Error),
 }
 
-async fn strings_to_vecs(
-    api_key: &str,
+async fn save_embeddings(
     vec_file: &mut File,
     offset: usize,
-    strings: &[String],
-) -> Result<usize, VectorizationError> {
-    vec_file.seek(SeekFrom::Start(offset as u64)).await?;
-
-    let (embeddings, failures) = embeddings_for(api_key, strings).await?;
+    embeddings: &[Embedding],
+) -> Result<(), VectorizationError> {
     let transmuted = unsafe {
         std::slice::from_raw_parts(embeddings.as_ptr() as *const u8, embeddings.len() * 4)
     };
+    vec_file.seek(SeekFrom::Start(offset as u64)).await?;
     vec_file.write_all(transmuted).await?;
     vec_file.flush().await?;
     vec_file.sync_data().await?;
 
-    Ok(failures)
+    Ok(())
 }
 
 pub async fn vectorize_from_operations<
@@ -69,22 +67,25 @@ pub async fn vectorize_from_operations<
         offset = progress_file.read_u64().await?;
     }
 
-    let mut filtered_op_stream = pin!(op_stream
+    let filtered_op_stream = pin!(op_stream
         .try_filter(|o| future::ready(o.has_string()))
         .skip(offset as usize)
         .chunks(100));
+    let mut taskstream = filtered_op_stream
+        .map(|chunk| {
+            let inner_api_key = api_key.to_string();
+            tokio::spawn(async move { chunk_to_embeds(inner_api_key, chunk).await })
+        })
+        .buffered(10);
 
     let mut failures = 0;
     eprintln!("starting indexing at {offset}");
-    while let Some(chunk) = filtered_op_stream.next().await {
-        let chunk: Result<Vec<String>, _> = chunk
-            .into_iter()
-            .map(|o| o.map(|o| o.string().unwrap()))
-            .collect();
-        let chunk = chunk?;
+    while let Some(embeds) = taskstream.next().await {
+        let (embeddings, chunk_failures) = embeds.unwrap()?;
 
-        failures += strings_to_vecs(api_key, vec_file, offset as usize, &chunk).await?;
-        offset += chunk.len() as u64;
+        save_embeddings(vec_file, offset as usize, &embeddings).await?;
+        failures += chunk_failures;
+        offset += embeddings.len() as u64;
         progress_file.seek(SeekFrom::Start(0)).await?;
         progress_file.write_u64(offset).await?;
         progress_file.flush().await?;
@@ -93,6 +94,19 @@ pub async fn vectorize_from_operations<
     }
 
     Ok(failures)
+}
+
+async fn chunk_to_embeds(
+    api_key: String,
+    chunk: Vec<Result<Operation, io::Error>>,
+) -> Result<(Vec<Embedding>, usize), VectorizationError> {
+    let chunk: Result<Vec<String>, _> = chunk
+        .into_iter()
+        .map(|o| o.map(|o| o.string().unwrap()))
+        .collect();
+    let chunk = chunk?;
+
+    Ok(embeddings_for(&api_key, &chunk).await?)
 }
 
 async fn get_operations_from_file(
