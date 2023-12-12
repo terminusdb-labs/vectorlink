@@ -1,5 +1,5 @@
 [package]
-name = "terminusdb-semantic-indexer"
+name = "vectorlink"
 version = "0.1.0"
 edition = "2021"
 
