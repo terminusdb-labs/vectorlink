@@ -81,9 +81,12 @@ pub async fn vectorize_from_operations<
     let mut failures = 0;
     eprintln!("starting indexing at {offset}");
     while let Some(embeds) = taskstream.next().await {
+        eprintln!("start of loop");
         let (embeddings, chunk_failures) = embeds.unwrap()?;
+        eprintln!("retrieved embeddings");
 
         save_embeddings(vec_file, offset as usize, &embeddings).await?;
+        eprintln!("saved embeddings");
         failures += chunk_failures;
         offset += embeddings.len() as u64;
         progress_file.seek(SeekFrom::Start(0)).await?;
