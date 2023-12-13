@@ -438,7 +438,9 @@ impl Service {
             Ok(hnsw.clone())
         } else {
             let mut path = self.path.clone();
-            match deserialize_index(&mut path, index_id, &self.vector_store)? {
+            let domain = self.vector_store.get_domain(index_id)?;
+            let index_path = index_serialization_path(path, index_id);
+            match deserialize_index(index_path, &domain, index_id, &self.vector_store)? {
                 Some(hnsw) => Ok(hnsw.into()),
                 None => Err(ResponseError::IndexNotFound),
             }

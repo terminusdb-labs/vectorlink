@@ -222,12 +222,10 @@ pub async fn index_using_operations_and_vectors<
     }
 
     // Start filling the HNSW
-    let mut vs_path_buf: PathBuf = vectorlink_path.as_ref().into();
+    let vs_path_buf: PathBuf = vectorlink_path.as_ref().into();
     let vs: VectorStore = VectorStore::new(&vs_path_buf, size);
     let index_id = create_index_name(domain, commit);
     let domain_obj = vs.get_domain(domain)?;
-    let mut hnsw: HnswIndex = deserialize_index(&mut vs_path_buf, &index_id, &vs)?
-        .unwrap_or_else(|| HnswIndex::new(OpenAI));
     let mut op_file = File::open(&op_file_path).await?;
     let mut op_stream = get_operations_from_file(&mut op_file).await?;
     let start_at: usize = offset as usize;
@@ -238,6 +236,13 @@ pub async fn index_using_operations_and_vectors<
     let temp_file = index_serialization_path(&staging_path, temp_file_name);
     let staging_file = index_serialization_path(&staging_path, index_file_name);
     let final_file = index_serialization_path(&vectorlink_path, domain);
+    let mut hnsw: HnswIndex;
+    if let Some(index) = deserialize_index(&staging_file, &domain_obj, &index_id, &vs)? {
+        hnsw = index;
+    } else {
+        hnsw = deserialize_index(&final_file, &domain_obj, &index_id, &vs)?
+            .unwrap_or_else(|| HnswIndex::new(OpenAI));
+    }
 
     while let Some(op) = op_stream.next().await {
         if i < start_at {

@@ -263,13 +263,12 @@ pub fn parse_index_name(name: &str) -> (String, String) {
     (domain.to_string(), commit.to_string())
 }
 
-pub fn deserialize_index(
-    path: &mut PathBuf,
+pub fn deserialize_index<P: AsRef<Path>>(
+    path: P,
+    domain: &Domain,
     name: &str,
     vector_store: &VectorStore,
 ) -> io::Result<Option<HnswIndex>> {
-    path.push(format!("{name}.hnsw"));
-    let (domain, _) = parse_index_name(name);
     let read_file = File::options().read(true).open(&path);
     if read_file
         .as_ref()
@@ -279,10 +278,9 @@ pub fn deserialize_index(
     }
     let read_file = read_file?;
     let hnsw: HnswStorageIndex = serde_json::from_reader(read_file).unwrap();
-    let domain = vector_store.get_domain(&domain)?;
     let hnsw = hnsw.transform_features(|t| Point::Stored {
         id: t.id,
-        vec: vector_store.get_vec(&domain, t.index).unwrap().unwrap(),
+        vec: vector_store.get_vec(domain, t.index).unwrap().unwrap(),
     });
     Ok(Some(hnsw))
 }
