@@ -168,7 +168,7 @@ pub async fn extend_vector_store<P0: AsRef<Path>, P1: AsRef<Path>>(
     domain.concatenate_file(&vec_path)
 }
 
-const INDEX_CHECKPOINT_SIZE: usize = 1000000;
+const INDEX_CHECKPOINT_SIZE: usize = 1_000;
 pub async fn index_using_operations_and_vectors<
     P0: AsRef<Path>,
     P1: AsRef<Path>,
