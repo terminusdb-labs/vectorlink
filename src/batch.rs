@@ -234,7 +234,7 @@ pub async fn index_using_operations_and_vectors<
     let mut i: usize = start_at;
     let mut searcher = Searcher::default();
     let temp_domain = format!("{domain}.tmp");
-    let temp_file = index_serialization_path(&staging_path, &temp_domain);
+    let temp_file = dbg!(index_serialization_path(&staging_path, &temp_domain));
     let staging_file = index_serialization_path(&staging_path, domain);
     let final_file = index_serialization_path(&vectorlink_path, domain);
 
