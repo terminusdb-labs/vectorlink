@@ -33,7 +33,10 @@ async fn save_embeddings(
     embeddings: &[Embedding],
 ) -> Result<(), VectorizationError> {
     let transmuted = unsafe {
-        std::slice::from_raw_parts(embeddings.as_ptr() as *const u8, embeddings.len() * 4)
+        std::slice::from_raw_parts(
+            embeddings.as_ptr() as *const u8,
+            std::mem::size_of_val(embeddings),
+        )
     };
     vec_file
         .seek(SeekFrom::Start(
