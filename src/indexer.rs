@@ -10,7 +10,7 @@ use rand_pcg::Lcg128Xsl64;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use space::{Metric, Neighbor};
-use std::fs::File;
+use std::{fs::File, path::Path};
 use std::{
     io,
     iter::{self, zip},
@@ -161,10 +161,6 @@ pub enum IndexError {
     JoinError(#[from] JoinError),
 }
 
-/*
-pub fn serialize_index(domain: Domain, hnsw: HnswIndex) -> io::Result<()> {}
- */
-
 pub fn start_indexing_from_operations(
     mut hnsw: HnswIndex,
     operations: Vec<PointOperation>,
@@ -238,10 +234,15 @@ pub fn search(p: &Point, mut num: usize, hnsw: &HnswIndex) -> Vec<PointQuery> {
     points
 }
 
-pub fn serialize_index(mut path: PathBuf, name: &str, hnsw: HnswIndex) -> io::Result<()> {
+pub fn index_serialization_path<P: AsRef<Path>>(path: P, name: &str) -> PathBuf {
     //let name = encode(name);
+    let mut path: PathBuf = path.as_ref().into();
     path.push(format!("{name}.hnsw"));
-    let write_file = File::options().write(true).create(true).open(&path)?;
+    path
+}
+
+pub fn serialize_index<P: AsRef<Path>>(filename: P, hnsw: HnswIndex) -> io::Result<()> {
+    let write_file = File::options().write(true).create(true).open(filename)?;
 
     let hnsw = hnsw.transform_features(|t| IndexPoint {
         id: t.id().to_string(),

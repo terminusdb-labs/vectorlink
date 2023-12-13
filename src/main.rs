@@ -242,17 +242,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 hnsw = start_indexing_from_operations(hnsw, new_ops).unwrap();
             }
             let index_id = create_index_name(&domain, &commit);
-            serialize_index(dirpath.to_path_buf(), &index_id, hnsw.clone()).unwrap();
+            let filename = index_serialization_path(dirpath, index_id);
+            serialize_index(filename, hnsw.clone()).unwrap();
         }
         Commands::Load2 {
             key,
             domain,
             directory,
             input,
-            ..
+            size,
+            commit,
         } => {
             let key = key_or_env(key);
-            index_from_operations_file(&key, input, directory, &domain)
+            index_from_operations_file(&key, input, directory, &domain, &commit, size)
                 .await
                 .unwrap()
         }

@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -138,6 +139,15 @@ impl Domain {
         //    data.len()
         //);
         self.read_file.read_exact_at(data, offset as u64)
+    }
+
+    pub fn concatenate_file<P: AsRef<Path>>(&self, path: P) -> io::Result<usize> {
+        let size = self.num_vecs();
+        let mut wfl = self.write_file.lock().unwrap();
+        wfl.seek(SeekFrom::End(0))?;
+        let mut read_file = File::options().read(true).open(&path)?;
+        io::copy(&mut read_file, &mut *wfl)?;
+        Ok(size)
     }
 
     fn num_vecs(&self) -> usize {

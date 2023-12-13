@@ -6,6 +6,7 @@ use std::{
 };
 
 use futures::{future, Stream, StreamExt, TryStreamExt};
+use hnsw::Searcher;
 use thiserror::Error;
 use tokio::{
     fs::{File, OpenOptions},
@@ -14,10 +15,28 @@ use tokio::{
 use tokio_stream::wrappers::LinesStream;
 
 use crate::{
+    indexer::{create_index_name, deserialize_index, serialize_index, HnswIndex, Point},
     openai::{embeddings_for, EmbeddingError},
     server::Operation,
     vecmath::Embedding,
+    vectors::VectorStore,
 };
+
+#[derive(Error, Debug)]
+pub enum BatchError {
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    #[error(transparent)]
+    VectorizationError(#[from] VectorizationError),
+    #[error(transparent)]
+    IndexingError(#[from] IndexingError),
+}
+
+#[derive(Error, Debug)]
+pub enum IndexingError {
+    #[error(transparent)]
+    Io(#[from] io::Error),
+}
 
 #[derive(Error, Debug)]
 pub enum VectorizationError {
@@ -134,12 +153,124 @@ async fn get_operations_from_file(
     Ok(stream)
 }
 
+pub async fn extend_vector_store<P0: AsRef<Path>, P1: AsRef<Path>>(
+    domain: &str,
+    vectorlink_path: P0,
+    vec_path: P1,
+    size: usize,
+) -> Result<usize, io::Error> {
+    let vs_path: PathBuf = vectorlink_path.as_ref().into();
+    let vs: VectorStore = VectorStore::new(vs_path, size);
+    let domain = vs.get_domain(domain)?;
+    domain.concatenate_file(&vec_path)
+}
+
+const INDEX_CHECKPOINT_SIZE: usize = 1000000;
+pub async fn index_using_operations_and_vectors<
+    P0: AsRef<Path>,
+    P1: AsRef<Path>,
+    P2: AsRef<Path>,
+    P3: AsRef<Path>,
+>(
+    domain: &str,
+    commit: &str,
+    vectorlink_path: P0,
+    staging_path: P1,
+    op_file_path: P2,
+    vec_path: P3,
+    size: usize,
+) -> Result<(), IndexingError> {
+    // first append vectors in bulk
+    let mut extended_path: PathBuf = staging_path.as_ref().into();
+    extended_path.push("vectors_extended");
+    let mut extended_file = OpenOptions::new().read(true).open(extended_path).await?;
+    let id_offset: u64;
+    if extended_file.metadata().await?.size() != 8 {
+        eprintln!("Concatenating to vector store");
+        id_offset = extend_vector_store(domain, &vectorlink_path, vec_path, size).await? as u64;
+        extended_file.write_u64(id_offset).await?;
+    } else {
+        eprintln!("Already concantenated");
+        id_offset = extended_file.read_u64().await?;
+    }
+
+    // Start at last hnsw offset
+    let mut progress_file_path: PathBuf = staging_path.as_ref().into();
+    progress_file_path.push("index_progress");
+
+    let offset: u64;
+    let mut progress_file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(progress_file_path)
+        .await?;
+    if progress_file.metadata().await?.size() != 8 {
+        // assume we have to start from scratch
+        progress_file.write_u64(id_offset).await?;
+        offset = id_offset;
+    } else {
+        offset = progress_file.read_u64().await?;
+    }
+
+    // Start filling the HNSW
+    let mut vs_path_buf: PathBuf = vectorlink_path.as_ref().into();
+    let vs: VectorStore = VectorStore::new(&vs_path_buf, size);
+    let index_id = create_index_name(domain, commit);
+    let domain_obj = vs.get_domain(domain)?;
+    let mut hnsw: HnswIndex = deserialize_index(&mut vs_path_buf, &index_id, &vs)?;
+    let mut op_file = File::open(&op_file_path).await?;
+    let mut op_stream = get_operations_from_file(&mut op_file).await?;
+    let start_at: usize = offset as usize;
+    let mut i: usize = start_at;
+    let mut searcher = Searcher::default();
+    let temp_domain = format("{name}.tmp");
+    let temp_file = index_serialization_path(&staging_path, temp_domain);
+    let staging_file = index_serialization_path(&staging_path, domain);
+    let final_file = index_serialization_path(&vectorlink_path, domain);
+
+    while let Some(op) = op_stream.next().await {
+        if i < start_at {
+            continue;
+        }
+        match op.unwrap() {
+            Operation::Inserted { id, .. } => {
+                // We will panic here if we are talking about ids that don't exists
+                // because it will not be fixed by resuming
+                let vec = vs.get_vec(&domain_obj, i)?.unwrap();
+                let point = Point::Stored { vec, id };
+                hnsw.insert(point, &mut searcher);
+            }
+            Operation::Changed { .. } => {
+                todo!()
+            }
+            Operation::Deleted { .. } => {
+                todo!()
+            }
+            Operation::Error { message } => {
+                panic!("Error in indexing {message}");
+            }
+        }
+        i += 1;
+        if i % INDEX_CHECKPOINT_SIZE == 0 {
+            progress_file.write_u64(i).await?;
+            progress_file.sync_data().await?;
+            serialize_index(&temp_file, hnsw.clone())?;
+            File::rename(temp_file, staging_file).await?;
+        }
+    }
+    File::rename(staging_file, final_file).await?;
+    Ok(())
+}
+
 pub async fn index_from_operations_file<P: AsRef<Path>>(
     api_key: &str,
     op_file_path: P,
     vectorlink_path: P,
     domain: &str,
-) -> Result<(), VectorizationError> {
+    commit: &str,
+    size: usize,
+) -> Result<(), BatchError> {
     let mut staging_path: PathBuf = vectorlink_path.as_ref().into();
     staging_path.push(".staging");
     staging_path.push(domain);
@@ -155,10 +286,20 @@ pub async fn index_from_operations_file<P: AsRef<Path>>(
     let mut progress_file_path = staging_path.clone();
     progress_file_path.push("progress");
 
-    let mut op_file = File::open(op_file_path).await?;
+    let mut op_file = File::open(&op_file_path).await?;
     let op_stream = get_operations_from_file(&mut op_file).await?;
 
     vectorize_from_operations(api_key, &mut vec_file, op_stream, progress_file_path).await?;
 
+    index_using_operations_and_vectors(
+        domain,
+        commit,
+        vectorlink_path,
+        staging_path,
+        op_file_path,
+        vector_path,
+        size,
+    )
+    .await?;
     Ok(())
 }
