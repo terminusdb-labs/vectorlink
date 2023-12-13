@@ -37,7 +37,11 @@ async fn save_embeddings(
     let transmuted = unsafe {
         std::slice::from_raw_parts(embeddings.as_ptr() as *const u8, embeddings.len() * 4)
     };
-    vec_file.seek(SeekFrom::Start(offset as u64)).await?;
+    vec_file
+        .seek(SeekFrom::Start(
+            (offset * std::mem::size_of::<Embedding>()) as u64,
+        ))
+        .await?;
     vec_file.write_all(transmuted).await?;
     vec_file.flush().await?;
     vec_file.sync_data().await?;
