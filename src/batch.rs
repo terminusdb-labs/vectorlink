@@ -3,7 +3,6 @@ use std::{
     os::unix::prelude::MetadataExt,
     path::{Path, PathBuf},
     pin::pin,
-    task::Poll,
 };
 
 use futures::{future, Stream, StreamExt, TryStreamExt};
@@ -13,7 +12,6 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader},
 };
 use tokio_stream::wrappers::LinesStream;
-use vectorlink::openai::truncated_tokens_for;
 
 use crate::{
     openai::{embeddings_for, EmbeddingError},
@@ -74,10 +72,10 @@ pub async fn vectorize_from_operations<
     }
 
     let filtered_op_stream = pin!(op_stream
-        .try_filter_map(|o| future::ready(Ok(o.string())))
-        .skip(offset as usize));
-    let chunked_op_stream = TokenChunk::new(filtered_op_stream, 1_000_000);
-    let mut taskstream = chunked_op_stream
+        .try_filter(|o| future::ready(o.has_string()))
+        .skip(offset as usize)
+        .chunks(100));
+    let mut taskstream = filtered_op_stream
         .map(|chunk| {
             let inner_api_key = api_key.to_string();
             tokio::spawn(async move { chunk_to_embeds(inner_api_key, chunk).await })
@@ -107,9 +105,15 @@ pub async fn vectorize_from_operations<
 
 async fn chunk_to_embeds(
     api_key: String,
-    chunk: Result<Vec<String>, io::Error>,
+    chunk: Vec<Result<Operation, io::Error>>,
 ) -> Result<(Vec<Embedding>, usize), VectorizationError> {
-    Ok(embeddings_for(&api_key, &chunk?).await?)
+    let chunk: Result<Vec<String>, _> = chunk
+        .into_iter()
+        .map(|o| o.map(|o| o.string().unwrap()))
+        .collect();
+    let chunk = chunk?;
+
+    Ok(embeddings_for(&api_key, &chunk).await?)
 }
 
 async fn get_operations_from_file(
@@ -154,57 +158,4 @@ pub async fn index_from_operations_file<P: AsRef<Path>>(
     vectorize_from_operations(api_key, &mut vec_file, op_stream, progress_file_path).await?;
 
     Ok(())
-}
-
-struct TokenChunk<S: Stream<Item = Result<String, E>> + Unpin, E> {
-    stream: S,
-    limit: usize,
-    collector: Vec<String>,
-    current_count: usize,
-}
-
-impl<S: Stream<Item = Result<String, E>> + Unpin, E> TokenChunk<S, E> {
-    fn new(stream: S, limit: usize) -> Self {
-        Self {
-            stream,
-            limit,
-            collector: Vec::new(),
-            current_count: 0,
-        }
-    }
-    fn collect_string(&mut self, s: String) -> Option<Vec<String>> {
-        let tokens = truncated_tokens_for(&s);
-        let new_count = self.current_count + tokens.len();
-        if new_count > self.limit {
-            self.current_count = tokens.len();
-            let mut new_vec = Vec::new();
-            new_vec.push(s);
-            std::mem::swap(&mut new_vec, &mut self.collector);
-            eprintln!("collected {} strings", new_vec.len());
-            Some(new_vec)
-        } else {
-            self.collector.push(s);
-            None
-        }
-    }
-}
-
-impl<S: Stream<Item = Result<String, E>> + Unpin, E> Stream for TokenChunk<S, E> {
-    type Item = Result<Vec<String>, E>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        let next = self.stream.poll_next_unpin(cx);
-        match next {
-            Poll::Ready(Some(Ok(string))) => match self.collect_string(string) {
-                Some(result) => Poll::Ready(Some(Ok(result))),
-                None => Poll::Pending,
-            },
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
-            Poll::Pending => Poll::Pending,
-        }
-    }
 }
