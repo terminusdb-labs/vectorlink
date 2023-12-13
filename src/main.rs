@@ -12,9 +12,9 @@ use batch::index_from_operations_file;
 use clap::CommandFactory;
 use clap::{Parser, Subcommand, ValueEnum};
 use hnsw::Hnsw;
-use indexer::serialize_index;
 use indexer::start_indexing_from_operations;
 use indexer::Point;
+use indexer::{index_serialization_path, serialize_index};
 use indexer::{operations_to_point_operations, OpenAI};
 use itertools::Itertools;
 use server::Operation;
@@ -242,7 +242,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 hnsw = start_indexing_from_operations(hnsw, new_ops).unwrap();
             }
             let index_id = create_index_name(&domain, &commit);
-            let filename = index_serialization_path(dirpath, index_id);
+            let filename = index_serialization_path(dirpath, &index_id);
             serialize_index(filename, hnsw.clone()).unwrap();
         }
         Commands::Load2 {

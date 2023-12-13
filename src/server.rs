@@ -42,6 +42,7 @@ use tokio_util::io::StreamReader;
 
 use crate::indexer::create_index_name;
 use crate::indexer::deserialize_index;
+use crate::indexer::index_serialization_path;
 use crate::indexer::operations_to_point_operations;
 use crate::indexer::search;
 use crate::indexer::serialize_index;
@@ -625,8 +626,8 @@ impl Service {
         indexes.insert(target_name.clone(), index.clone());
         std::mem::drop(indexes);
         tokio::task::block_in_place(move || {
-            let path = self.path.clone();
-            serialize_index(path, &target_name, (*index).clone()).unwrap();
+            let file_name = index_serialization_path(&self.path, &target_name);
+            serialize_index(file_name, (*index).clone()).unwrap();
         });
         Ok(())
     }
@@ -708,8 +709,8 @@ impl Service {
             },
         )
         .await;
-        let path = self.path.clone();
-        serialize_index(path, index_id, hnsw.clone())?;
+        let file_name = index_serialization_path(&self.path, index_id);
+        serialize_index(file_name, hnsw.clone())?;
         Ok((id, hnsw))
     }
 

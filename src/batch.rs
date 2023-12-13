@@ -15,7 +15,10 @@ use tokio::{
 use tokio_stream::wrappers::LinesStream;
 
 use crate::{
-    indexer::{create_index_name, deserialize_index, serialize_index, HnswIndex, Point},
+    indexer::{
+        create_index_name, deserialize_index, index_serialization_path, serialize_index, HnswIndex,
+        Point,
+    },
     openai::{embeddings_for, EmbeddingError},
     server::Operation,
     vecmath::Embedding,
@@ -224,8 +227,8 @@ pub async fn index_using_operations_and_vectors<
     let start_at: usize = offset as usize;
     let mut i: usize = start_at;
     let mut searcher = Searcher::default();
-    let temp_domain = format("{name}.tmp");
-    let temp_file = index_serialization_path(&staging_path, temp_domain);
+    let temp_domain = format!("{domain}.tmp");
+    let temp_file = index_serialization_path(&staging_path, &temp_domain);
     let staging_file = index_serialization_path(&staging_path, domain);
     let final_file = index_serialization_path(&vectorlink_path, domain);
 
@@ -253,13 +256,13 @@ pub async fn index_using_operations_and_vectors<
         }
         i += 1;
         if i % INDEX_CHECKPOINT_SIZE == 0 {
-            progress_file.write_u64(i).await?;
+            progress_file.write_u64(i as u64).await?;
             progress_file.sync_data().await?;
             serialize_index(&temp_file, hnsw.clone())?;
-            File::rename(temp_file, staging_file).await?;
+            tokio::fs::rename(&temp_file, &staging_file).await?;
         }
     }
-    File::rename(staging_file, final_file).await?;
+    tokio::fs::rename(staging_file, final_file).await?;
     Ok(())
 }
 
