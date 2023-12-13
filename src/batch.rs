@@ -233,10 +233,11 @@ pub async fn index_using_operations_and_vectors<
     let start_at: usize = offset as usize;
     let mut i: usize = start_at;
     let mut searcher = Searcher::default();
-    let temp_domain = format!("{domain}.tmp");
-    let temp_file = dbg!(index_serialization_path(&staging_path, &temp_domain));
-    let staging_file = index_serialization_path(&staging_path, domain);
-    let final_file = index_serialization_path(&vectorlink_path, domain);
+    let temp_file_name = "temp_index";
+    let index_file_name = "hnsw_index";
+    let temp_file = dbg!(index_serialization_path(&staging_path, temp_file_name));
+    let staging_file = dbg!(index_serialization_path(&staging_path, index_file_name));
+    let final_file = dbg!(index_serialization_path(&vectorlink_path, domain));
 
     while let Some(op) = op_stream.next().await {
         if i < start_at {
