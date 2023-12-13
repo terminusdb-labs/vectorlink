@@ -410,6 +410,12 @@ enum ResponseError {
     IdMissing(String),
     #[error("Embedding error: {0:?}")]
     EmbeddingError(#[from] EmbeddingError),
+    #[error("index not found")]
+    IndexNotFound,
+    #[error("source commit not found")]
+    SourceCommitNotFound,
+    #[error("target commit already has an index")]
+    TargetCommitAlreadyHasIndex,
 }
 
 fn add_to_duplicates(duplicates: &mut HashMap<usize, usize>, id1: usize, id2: usize) {
@@ -427,12 +433,15 @@ impl Service {
         self.tasks.write().await.insert(task_id, status);
     }
 
-    async fn get_index(&self, index_id: &str) -> io::Result<Arc<HnswIndex>> {
+    async fn get_index(&self, index_id: &str) -> Result<Arc<HnswIndex>, ResponseError> {
         if let Some(hnsw) = self.indexes.read().await.get(index_id) {
-            Ok(hnsw).cloned()
+            Ok(hnsw.clone())
         } else {
             let mut path = self.path.clone();
-            Ok(deserialize_index(&mut path, index_id, &self.vector_store)?.into())
+            match deserialize_index(&mut path, index_id, &self.vector_store)? {
+                Some(hnsw) => Ok(hnsw.into()),
+                None => Err(ResponseError::IndexNotFound),
+            }
         }
     }
 
@@ -618,7 +627,7 @@ impl Service {
         domain: String,
         source_commit: String,
         target_commit: String,
-    ) -> Result<(), AssignIndexError> {
+    ) -> Result<(), ResponseError> {
         let source_name = create_index_name(&domain, &source_commit);
         let target_name = create_index_name(&domain, &target_commit);
         let index = self.get_index(&source_name).await?;

@@ -17,7 +17,7 @@ use tokio_stream::wrappers::LinesStream;
 use crate::{
     indexer::{
         create_index_name, deserialize_index, index_serialization_path, serialize_index, HnswIndex,
-        Point,
+        OpenAI, Point,
     },
     openai::{embeddings_for, EmbeddingError},
     server::Operation,
@@ -226,7 +226,8 @@ pub async fn index_using_operations_and_vectors<
     let vs: VectorStore = VectorStore::new(&vs_path_buf, size);
     let index_id = create_index_name(domain, commit);
     let domain_obj = vs.get_domain(domain)?;
-    let mut hnsw: HnswIndex = deserialize_index(&mut vs_path_buf, &index_id, &vs)?;
+    let mut hnsw: HnswIndex = deserialize_index(&mut vs_path_buf, &index_id, &vs)?
+        .unwrap_or_else(|| HnswIndex::new(OpenAI));
     let mut op_file = File::open(&op_file_path).await?;
     let mut op_stream = get_operations_from_file(&mut op_file).await?;
     let start_at: usize = offset as usize;
