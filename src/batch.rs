@@ -268,7 +268,8 @@ pub async fn index_using_operations_and_vectors<
         }
         i += 1;
         if i % INDEX_CHECKPOINT_SIZE == 0 {
-            eprintln!("Checkpointing index...");
+            eprintln!("Checkpointing index at {i}...");
+            progress_file.seek(SeekFrom::Start(0)).await?;
             progress_file.write_u64(i as u64).await?;
             progress_file.sync_data().await?;
             serialize_index(&temp_file, hnsw.clone())?;
