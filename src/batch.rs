@@ -186,7 +186,12 @@ pub async fn index_using_operations_and_vectors<
     // first append vectors in bulk
     let mut extended_path: PathBuf = staging_path.as_ref().into();
     extended_path.push("vectors_extended");
-    let mut extended_file = OpenOptions::new().read(true).open(extended_path).await?;
+    let mut extended_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(extended_path)
+        .await?;
     let id_offset: u64;
     if extended_file.metadata().await?.size() != 8 {
         eprintln!("Concatenating to vector store");
