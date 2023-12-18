@@ -227,16 +227,15 @@ pub async fn index_using_operations_and_vectors<
     // Start filling the HNSW
     let vs_path_buf: PathBuf = vectorlink_path.as_ref().into();
     let vs: VectorStore = VectorStore::new(&vs_path_buf, size);
-    let index_id = create_index_name(domain, commit);
+    //    let index_id = create_index_name(domain, commit);
     let domain_obj = vs.get_domain(domain)?;
     let mut op_file = File::open(&op_file_path).await?;
     let mut op_stream = get_operations_from_file(&mut op_file).await?;
     let start_at: usize = offset as usize;
     let mut i: usize = start_at;
-    let mut searcher = Searcher::default();
     let temp_file_name = "temp_index";
     let index_file_name = "index";
-    let temp_file = index_serialization_path(&staging_path, temp_file_name);
+    //    let temp_file = index_serialization_path(&staging_path, temp_file_name);
     let staging_file = index_serialization_path(&staging_path, index_file_name);
     let final_file = index_serialization_path(&vectorlink_path, domain);
     /*
@@ -247,13 +246,13 @@ pub async fn index_using_operations_and_vectors<
         hnsw = deserialize_index(&final_file, &domain_obj, &index_id, &vs)?
             .unwrap_or_else(|| HnswIndex::new(OpenAI));
     }*/
-    let mut vecs: Vec<VectorId>;
+    let mut vecs: Vec<VectorId> = Vec::new();
     while let Some(op) = op_stream.next().await {
         if i < start_at {
             continue;
         }
         match op.unwrap() {
-            Operation::Inserted { id, .. } => {
+            Operation::Inserted { .. } => {
                 vecs.push(VectorId(i));
             }
             Operation::Changed { .. } => {
