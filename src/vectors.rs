@@ -273,13 +273,15 @@ impl PageArena {
             p: &*page,
         });
         let mut loaded = self.loaded.write().unwrap();
-        loaded.insert(
-            spec,
-            PinnedVectorPage {
-                handle: Arc::downgrade(&handle),
-                page: LoadedVectorPage { index, page },
-            },
-        );
+        assert!(loaded
+            .insert(
+                spec,
+                PinnedVectorPage {
+                    handle: Arc::downgrade(&handle),
+                    page: LoadedVectorPage { index, page },
+                },
+            )
+            .is_none());
         std::mem::drop(loaded);
 
         let mut loading = self.loading.lock().unwrap();
