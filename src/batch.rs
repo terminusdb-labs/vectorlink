@@ -3,10 +3,12 @@ use std::{
     os::unix::prelude::MetadataExt,
     path::{Path, PathBuf},
     pin::pin,
+    sync::Arc,
 };
 
 use futures::{future, Stream, StreamExt, TryStreamExt};
 use hnsw::Searcher;
+use parallel_hnsw::{Hnsw, VectorId};
 use thiserror::Error;
 use tokio::{
     fs::{File, OpenOptions},
@@ -15,6 +17,7 @@ use tokio::{
 use tokio_stream::wrappers::LinesStream;
 
 use crate::{
+    comparator::OpenAIComparator,
     indexer::{
         create_index_name, deserialize_index, index_serialization_path, serialize_index, HnswIndex,
         OpenAI, Point,
@@ -236,25 +239,22 @@ pub async fn index_using_operations_and_vectors<
     let temp_file = index_serialization_path(&staging_path, temp_file_name);
     let staging_file = index_serialization_path(&staging_path, index_file_name);
     let final_file = index_serialization_path(&vectorlink_path, domain);
+    /*
     let mut hnsw: HnswIndex;
     if let Some(index) = deserialize_index(&staging_file, &domain_obj, &index_id, &vs)? {
         hnsw = index;
     } else {
         hnsw = deserialize_index(&final_file, &domain_obj, &index_id, &vs)?
             .unwrap_or_else(|| HnswIndex::new(OpenAI));
-    }
-
+    }*/
+    let mut vecs: Vec<VectorId>;
     while let Some(op) = op_stream.next().await {
         if i < start_at {
             continue;
         }
         match op.unwrap() {
             Operation::Inserted { id, .. } => {
-                // We will panic here if we are talking about ids that don't exists
-                // because it will not be fixed by resuming
-                let vec = vs.get_vec(&domain_obj, i)?.unwrap();
-                let point = Point::Stored { vec, id };
-                hnsw.insert(point, &mut searcher);
+                vecs.push(VectorId(i));
             }
             Operation::Changed { .. } => {
                 todo!()
@@ -267,16 +267,23 @@ pub async fn index_using_operations_and_vectors<
             }
         }
         i += 1;
-        if i % INDEX_CHECKPOINT_SIZE == 0 {
-            eprintln!("Checkpointing index at {i}...");
-            progress_file.seek(SeekFrom::Start(0)).await?;
-            progress_file.write_u64(i as u64).await?;
-            progress_file.sync_data().await?;
-            serialize_index(&temp_file, hnsw.clone())?;
-            tokio::fs::rename(&temp_file, &staging_file).await?;
-            eprintln!("Checkpoint complete");
-        }
+        /*
+           if i % INDEX_CHECKPOINT_SIZE == 0 {
+               eprintln!("Checkpointing index at {i}...");
+               progress_file.seek(SeekFrom::Start(0)).await?;
+               progress_file.write_u64(i as u64).await?;
+               progress_file.sync_data().await?;
+               serialize_index(&temp_file, hnsw.clone())?;
+               tokio::fs::rename(&temp_file, &staging_file).await?;
+               eprintln!("Checkpoint complete");
+           }
+        */
     }
+    let comparator = OpenAIComparator {
+        domain: domain_obj.clone(),
+        store: Arc::new(vs),
+    };
+    let hnsw = Hnsw::generate(comparator, vecs, 24, 48);
     tokio::fs::rename(staging_file, final_file).await?;
     Ok(())
 }

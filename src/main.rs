@@ -2,6 +2,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 
 mod batch;
+mod comparator;
 mod indexer;
 mod openai;
 mod server;
@@ -11,12 +12,13 @@ mod vectors;
 use batch::index_from_operations_file;
 use clap::CommandFactory;
 use clap::{Parser, Subcommand, ValueEnum};
-use hnsw::Hnsw;
+//use hnsw::Hnsw;
 use indexer::start_indexing_from_operations;
 use indexer::Point;
 use indexer::{index_serialization_path, serialize_index};
 use indexer::{operations_to_point_operations, OpenAI};
 use itertools::Itertools;
+use parallel_hnsw::Hnsw;
 use server::Operation;
 use space::Metric;
 use std::fs::File;
@@ -217,7 +219,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         } => {
             let path = Path::new(&input);
             let dirpath = Path::new(&directory);
-            let mut hnsw: HnswIndex = Hnsw::new(OpenAI);
+            panic!("yikes!");
+            /*
+            let mut hnsw: HnswIndex<OpenAIComparator, = Hnsw::new(OpenAI);
             let store = VectorStore::new(dirpath, size);
             let resolved_domain = store.get_domain(&domain)?;
 
@@ -244,6 +248,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let index_id = create_index_name(&domain, &commit);
             let filename = index_serialization_path(dirpath, &index_id);
             serialize_index(filename, hnsw.clone()).unwrap();
+            */
         }
         Commands::Load2 {
             key,
