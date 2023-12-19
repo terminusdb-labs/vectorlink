@@ -227,7 +227,8 @@ pub fn search(p: &Point, mut num: usize, hnsw: &HnswIndex) -> Vec<PointQuery> {
 pub fn index_serialization_path<P: AsRef<Path>>(path: P, name: &str) -> PathBuf {
     //let name = encode(name);
     let mut path: PathBuf = path.as_ref().into();
-    path.push(format!("{name}.hnsw"));
+    let encoded_name = encode(name);
+    path.push(format!("{encoded_name}.hnsw"));
     path
 }
 
