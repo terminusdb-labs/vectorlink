@@ -267,9 +267,14 @@ pub async fn index_using_operations_and_vectors<
     let vecs: Vec<_> = (offset as usize..(offset as usize + i))
         .map(VectorId)
         .collect();
+
+    eprintln!("ready to generate hnsw");
     let hnsw = Hnsw::generate(comparator, vecs, 24, 48);
-    let _res = hnsw.serialize(&staging_file);
+    eprintln!("done generating hnsw");
+    hnsw.serialize(&staging_file).unwrap();
+    eprintln!("done serializing hnsw");
     tokio::fs::rename(&staging_file, final_file).await?;
+    eprintln!("renamed hnsw");
     Ok(())
 }
 
