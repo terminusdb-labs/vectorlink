@@ -411,8 +411,8 @@ impl PageArena {
     }
 
     pub fn page_from_any(self: &Arc<Self>, spec: PageSpec) -> Option<Arc<PageHandle>> {
-        self.cached_to_loaded(spec)
-            .or_else(|| self.page_from_loaded(spec))
+        self.page_from_loaded(spec)
+            .or_else(|| self.cached_to_loaded(spec))
     }
 
     pub fn statistics(&self) -> VectorStoreStatistics {
