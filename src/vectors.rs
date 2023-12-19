@@ -445,7 +445,7 @@ unsafe impl Sync for PageHandle {}
 
 impl Drop for PageHandle {
     fn drop(&mut self) {
-        self.arena.loaded_to_cached(self.spec);
+        // self.arena.loaded_to_cached(self.spec);
     }
 }
 
