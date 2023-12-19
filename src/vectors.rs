@@ -47,6 +47,10 @@ pub struct Domain {
 }
 
 impl Domain {
+    pub fn name(&self) -> String {
+        self.name()
+    }
+
     fn open(dir: &Path, name: &str, index: usize) -> io::Result<Self> {
         let mut path = dir.to_path_buf();
         let name = encode(name);
@@ -696,6 +700,10 @@ impl VectorStore {
 
     pub fn statistics(&self) -> VectorStoreStatistics {
         self.arena.statistics()
+    }
+
+    pub fn dir(&self) -> String {
+        self.dir.to_str().unwrap().to_string()
     }
 }
 

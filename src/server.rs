@@ -4,7 +4,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use futures::StreamExt;
 use futures::TryStreamExt;
-use hnsw::Hnsw;
+
 use hyper::HeaderMap;
 use hyper::StatusCode;
 use hyper::{
@@ -12,6 +12,10 @@ use hyper::{
     Body, Method, Request, Response, Server, Uri,
 };
 use lazy_static::lazy_static;
+use parallel_hnsw::AbstractVector;
+use parallel_hnsw::AllVectorIterator;
+use parallel_hnsw::Hnsw;
+use parallel_hnsw::SerializationError;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use rayon::prelude::*;
@@ -27,6 +31,7 @@ use std::{
     convert::Infallible,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     path::PathBuf,
+    slice::Iter,
     sync::Arc,
 };
 use std::{
@@ -36,6 +41,7 @@ use std::{
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tokio::task;
+use tokio::task::JoinError;
 use tokio::{io::AsyncBufReadExt, sync::RwLock};
 use tokio_stream::{wrappers::LinesStream, Stream};
 use tokio_util::io::StreamReader;
@@ -416,6 +422,12 @@ enum ResponseError {
     SourceCommitNotFound,
     #[error("target commit already has an index")]
     TargetCommitAlreadyHasIndex,
+    #[error("{0:?}")]
+    SerializationError(#[from] SerializationError),
+    #[error("{0:?}")]
+    JoinError(#[from] JoinError),
+    #[error("{0:?}")]
+    IndexError(#[from] IndexError),
 }
 
 fn add_to_duplicates(duplicates: &mut HashMap<usize, usize>, id1: usize, id2: usize) {
@@ -440,7 +452,7 @@ impl Service {
             let mut path = self.path.clone();
             let domain = self.vector_store.get_domain(index_id)?;
             let index_path = index_serialization_path(path, index_id);
-            match deserialize_index(index_path, &domain, index_id, &self.vector_store)? {
+            match deserialize_index(index_path)? {
                 Some(hnsw) => Ok(hnsw.into()),
                 None => Err(ResponseError::IndexNotFound),
             }
@@ -506,15 +518,17 @@ impl Service {
         }
     }
 
-    async fn load_hnsw_for_indexing(&self, idxid: IndexIdentifier) -> HnswIndex {
+    async fn load_hnsw_for_indexing(
+        &self,
+        idxid: IndexIdentifier,
+    ) -> Result<Arc<HnswIndex>, ResponseError> {
         if let Some(previous_id) = idxid.previous {
             //let commit = idxid.commit;
             let domain = idxid.domain;
             let previous_id = create_index_name(&domain, &previous_id);
-            let hnsw = self.get_index(&previous_id).await.unwrap();
-            (*hnsw).clone()
+            self.get_index(&previous_id).await
         } else {
-            Hnsw::new(OpenAI)
+            Err(ResponseError::IndexNotFound)
         }
     }
 
@@ -527,7 +541,7 @@ impl Service {
         api_key: String,
         index_id: &str,
         content_endpoint: String,
-    ) -> Result<(String, HnswIndex), IndexError> {
+    ) -> Result<(String, Arc<HnswIndex>), ResponseError> {
         let internal_task_id = task_id;
         let opstream = get_operations_from_content_endpoint(
             content_endpoint.to_string(),
@@ -583,7 +597,7 @@ impl Service {
 
                     match result {
                         Ok((id, hnsw)) => {
-                            let layer_len = hnsw.layer_len(0);
+                            let layer_len = hnsw.layer_count();
                             self.set_index(id, hnsw.into()).await;
                             self.set_task_status(
                                 task_id,
@@ -638,7 +652,7 @@ impl Service {
         std::mem::drop(indexes);
         tokio::task::block_in_place(move || {
             let file_name = index_serialization_path(&self.path, &target_name);
-            serialize_index(file_name, (*index).clone()).unwrap();
+            serialize_index(file_name, &index).unwrap();
         });
         Ok(())
     }
@@ -655,7 +669,7 @@ impl Service {
         index_id: &str,
         task_id: &str,
         api_key: &str,
-    ) -> Result<(String, HnswIndex), IndexError> {
+    ) -> Result<(String, Arc<HnswIndex>), ResponseError> {
         let id = create_index_name(&domain, &commit);
         let mut hnsw = self
             .load_hnsw_for_indexing(IndexIdentifier {
@@ -663,7 +677,8 @@ impl Service {
                 commit,
                 previous,
             })
-            .await;
+            .await?;
+
         let domain = self.vector_store.get_domain(&domain)?;
         let old_status = self.get_task_status(task_id).await.unwrap();
         self.set_task_status(
@@ -721,7 +736,7 @@ impl Service {
         )
         .await;
         let file_name = index_serialization_path(&self.path, index_id);
-        serialize_index(file_name, hnsw.clone())?;
+        serialize_index(file_name, &hnsw)?;
         Ok((id, hnsw))
     }
 
@@ -859,27 +874,30 @@ impl Service {
         let index_id = create_index_name(&domain, &commit);
         // if None, then return 404
         let hnsw = self.get_index(&index_id).await?;
-        let elts = hnsw.layer_len(0);
-        let qp = (0..elts)
-            .into_par_iter()
-            .find_first(|i| hnsw.feature(*i).id() == id)
-            .map(|i| hnsw.feature(i));
+        let elts = hnsw.layer_count();
+        todo!();
+        /*
+            let qp = (0..elts)
+                .into_par_iter()
+                .find_first(|i| hnsw.feature(*i).id() == id)
+                .map(|i| hnsw.feature(i));
 
-        match qp {
-            Some(qp) => {
-                let res = search(qp, count, &hnsw);
-                let ids: Vec<QueryResult> = res
-                    .par_iter()
-                    .map(|p| QueryResult {
-                        id: p.id().to_string(),
-                        distance: f32::from_bits(p.distance()),
-                    })
-                    .collect();
-                let s = serde_json::to_string(&ids)?;
-                Ok(s)
-            }
-            None => Err(ResponseError::IdMissing(id)),
+            match qp {
+                Some(qp) => {
+                    let res = search(qp, count, &hnsw);
+                    let ids: Vec<QueryResult> = res
+                        .par_iter()
+                        .map(|p| QueryResult {
+                            id: p.id().to_string(),
+                            distance: p.distance(),
+                        })
+                        .collect();
+                    let s = serde_json::to_string(&ids)?;
+                    Ok(s)
+                }
+                None => Err(ResponseError::IdMissing(id)),
         }
+            */
     }
 
     async fn get_duplicate_candidates(
@@ -892,18 +910,21 @@ impl Service {
         let index_id = create_index_name(&domain, &commit);
         // if None, then return 404
         let hnsw = self.get_index(&index_id).await?;
-        let elts = hnsw.layer_len(0);
-        let clusters: Vec<(usize, Vec<(usize, f32)>)> = (0..elts)
-            .into_par_iter()
+        todo!();
+
+        /*
+        let elts: AllVectorIterator<'_> = hnsw.all_vectors();
+        let clusters: Vec<(usize, Vec<(usize, f32)>)> = elts
+            .par_bridge()
             .map(|i| {
-                let current_point = &hnsw.feature(i);
-                let results = search(current_point, candidates + 1, &hnsw);
+                let current_point = AbstractVector::Stored(i);
+                let results = hnsw.search(current_point, candidates + 1);
                 let mut cluster = Vec::new();
                 for result in results.iter() {
-                    if result.internal_id() != i {
-                        let distance = f32::from_bits(result.distance());
+                    if result.0 != i {
+                        let distance = result.1;
                         if distance < threshold.unwrap_or(f32::MAX) {
-                            cluster.push((result.internal_id(), distance))
+                            cluster.push((result.0, distance))
                         }
                     }
                 }
@@ -919,9 +940,10 @@ impl Service {
                     .collect();
                 (hnsw.feature(i).id(), vns)
             })
-            .collect();
+        .collect();
         let result = serde_json::to_string(&v)?;
         Ok(result)
+        */
     }
 
     async fn post(&self, req: Request<Body>) -> Result<Response<Body>, Infallible> {
@@ -975,8 +997,8 @@ impl Service {
         let ids: Vec<QueryResult> = res
             .iter()
             .map(|p| QueryResult {
-                id: p.id().to_string(),
-                distance: f32::from_bits(p.distance()),
+                id: p.internal_id().to_string(),
+                distance: p.distance(),
             })
             .collect();
         let s = serde_json::to_string(&ids)?;
