@@ -249,8 +249,11 @@ pub fn parse_index_name(name: &str) -> (String, String) {
     (domain.to_string(), commit.to_string())
 }
 
-pub fn deserialize_index<P: AsRef<Path>>(path: P) -> Result<Option<HnswIndex>, SerializationError> {
-    Hnsw::deserialize(path)
+pub fn deserialize_index<P: AsRef<Path>>(
+    path: P,
+    vs: Arc<VectorStore>,
+) -> Result<Option<HnswIndex>, SerializationError> {
+    Hnsw::deserialize(path, vs)
 }
 
 #[cfg(test)]

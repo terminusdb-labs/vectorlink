@@ -47,8 +47,8 @@ pub struct Domain {
 }
 
 impl Domain {
-    pub fn name(&self) -> String {
-        self.name()
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     fn open(dir: &Path, name: &str, index: usize) -> io::Result<Self> {

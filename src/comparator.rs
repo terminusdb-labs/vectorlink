@@ -19,11 +19,11 @@ pub struct OpenAIComparator {
 #[derive(Serialize, Deserialize)]
 pub struct ComparatorMeta {
     domain: String,
-    vector_store_path: String,
     size: usize,
 }
 
 impl Comparator<Embedding> for OpenAIComparator {
+    type Params = Arc<VectorStore>;
     fn compare_vec(&self, v1: AbstractVector<Embedding>, v2: AbstractVector<Embedding>) -> f32 {
         #[allow(unused_assignments)]
         let mut v1_opt = None;
@@ -56,8 +56,7 @@ impl Comparator<Embedding> for OpenAIComparator {
         // How do we get this value?
         let size = 2_000_000;
         let comparator = ComparatorMeta {
-            domain,
-            vector_store_path,
+            domain: domain.to_string(),
             size,
         };
         let comparator_meta = serde_json::to_string(&comparator)?;
@@ -65,16 +64,14 @@ impl Comparator<Embedding> for OpenAIComparator {
         Ok(())
     }
 
-    fn deserialize<P: AsRef<Path>>(path: P) -> Result<Self, SerializationError> {
+    fn deserialize<P: AsRef<Path>>(
+        path: P,
+        store: Arc<VectorStore>,
+    ) -> Result<Self, SerializationError> {
         let mut comparator_file = OpenOptions::new().read(true).open(path)?;
         let mut contents = String::new();
         comparator_file.read_to_string(&mut contents)?;
-        let ComparatorMeta {
-            domain,
-            vector_store_path,
-            size,
-        } = serde_json::from_str(&contents)?;
-        let store = VectorStore::new(&vector_store_path, size);
+        let ComparatorMeta { domain, size } = serde_json::from_str(&contents)?;
         let domain = store.get_domain(&domain)?;
         Ok(OpenAIComparator {
             domain,
