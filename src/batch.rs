@@ -273,7 +273,8 @@ pub async fn index_using_operations_and_vectors<
     eprintln!("done generating hnsw");
     hnsw.serialize(&staging_file).unwrap();
     eprintln!("done serializing hnsw");
-    tokio::fs::rename(&staging_file, final_file).await?;
+    eprintln!("renaming {staging_file:?} to {final_file:?}");
+    tokio::fs::rename(&staging_file, &final_file).await?;
     eprintln!("renamed hnsw");
     Ok(())
 }
