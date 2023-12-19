@@ -1,3 +1,4 @@
+pub mod comparator;
 pub mod indexer;
 pub mod openai;
 pub mod server;

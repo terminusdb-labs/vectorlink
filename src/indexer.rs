@@ -1,16 +1,16 @@
 #![allow(unused, dead_code)]
 use crate::{
+    comparator::OpenAIComparator,
     openai::{embeddings_for, EmbeddingError},
     server::Operation,
     vecmath::{self, Embedding},
     vectors::{Domain, LoadedVec, VectorStore},
 };
-use hnsw::{Hnsw, Searcher};
+use parallel_hnsw::{AbstractVector, Hnsw, SerializationError, VectorId};
 use rand_pcg::Lcg128Xsl64;
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
 use space::{Metric, Neighbor};
-use std::{fs::File, path::Path};
+use std::{fs::File, path::Path, sync::Arc};
 use std::{
     io,
     iter::{self, zip},
@@ -20,8 +20,8 @@ use thiserror::Error;
 use tokio::task::JoinError;
 use urlencoding::{decode, encode};
 
-pub type HnswIndex = Hnsw<OpenAI, Point, Lcg128Xsl64, 24, 48>;
-pub type HnswStorageIndex = Hnsw<OpenAI, IndexPoint, Lcg128Xsl64, 24, 48>;
+pub type HnswIndex = Hnsw<OpenAIComparator, Embedding>;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Point {
@@ -29,7 +29,6 @@ pub enum Point {
     Mem { vec: Box<Embedding> },
 }
 
-#[derive(Serialize, Deserialize)]
 pub struct IndexPoint {
     id: String,
     index: usize,
@@ -54,6 +53,13 @@ impl Point {
         match self {
             Point::Stored { id: _, vec } => vec,
             Point::Mem { vec } => vec,
+        }
+    }
+
+    fn abstract_vector(&self) -> AbstractVector<Embedding> {
+        match self {
+            Point::Stored { id, vec } => AbstractVector::Stored(VectorId(vec.id())),
+            Point::Mem { vec } => AbstractVector::Unstored(vec),
         }
     }
 }
@@ -162,9 +168,11 @@ pub enum IndexError {
 }
 
 pub fn start_indexing_from_operations(
-    mut hnsw: HnswIndex,
+    hnsw: Arc<HnswIndex>,
     operations: Vec<PointOperation>,
-) -> Result<HnswIndex, io::Error> {
+) -> Result<Arc<HnswIndex>, io::Error> {
+    todo!()
+    /*
     let mut searcher = Searcher::default();
     for operation in operations {
         match operation {
@@ -178,6 +186,7 @@ pub fn start_indexing_from_operations(
     // Put this index somewhere!
     //todo!()
     Ok(hnsw)
+    */
 }
 
 #[derive(Debug, Error)]
@@ -189,8 +198,7 @@ pub enum SearchError {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PointQuery {
     id: usize,
-    point: Point,
-    distance: u32,
+    distance: f32,
 }
 
 impl PointQuery {
@@ -198,37 +206,19 @@ impl PointQuery {
         self.id
     }
 
-    pub fn id(&self) -> &str {
-        self.point.id()
-    }
-
-    pub fn distance(&self) -> u32 {
+    pub fn distance(&self) -> f32 {
         self.distance
     }
 }
 
 pub fn search(p: &Point, mut num: usize, hnsw: &HnswIndex) -> Vec<PointQuery> {
-    // We need to set the number correctly
-    // to make sure we don't go out of bounds
-    let layer_len = hnsw.layer_len(0);
-    if layer_len < num {
-        num = layer_len;
-    }
-    let mut output: Vec<_> = iter::repeat(Neighbor {
-        index: !0,
-        distance: !0,
-    })
-    .take(num)
-    .collect();
-    let mut searcher = Searcher::default();
     let ef = num.max(100);
-    hnsw.nearest(p, ef, &mut searcher, &mut output);
+    let output = hnsw.search(p.abstract_vector(), ef);
     let points = output
         .into_iter()
         .map(|elt| PointQuery {
-            id: elt.index,
-            point: hnsw.feature(elt.index).clone(),
-            distance: elt.distance,
+            id: elt.0 .0,
+            distance: elt.1,
         })
         .collect();
     points
@@ -241,15 +231,11 @@ pub fn index_serialization_path<P: AsRef<Path>>(path: P, name: &str) -> PathBuf 
     path
 }
 
-pub fn serialize_index<P: AsRef<Path>>(filename: P, hnsw: HnswIndex) -> io::Result<()> {
-    let write_file = File::options().write(true).create(true).open(filename)?;
-
-    let hnsw = hnsw.transform_features(|t| IndexPoint {
-        id: t.id().to_string(),
-        index: t.vec_id(),
-    });
-    serde_json::to_writer(write_file, &hnsw)?;
-    Ok(())
+pub fn serialize_index<P: AsRef<Path>>(
+    filename: P,
+    hnsw: &HnswIndex,
+) -> Result<(), SerializationError> {
+    hnsw.serialize(filename)
 }
 
 pub fn create_index_name(domain: &str, commit: &str) -> String {
@@ -263,26 +249,8 @@ pub fn parse_index_name(name: &str) -> (String, String) {
     (domain.to_string(), commit.to_string())
 }
 
-pub fn deserialize_index<P: AsRef<Path>>(
-    path: P,
-    domain: &Domain,
-    name: &str,
-    vector_store: &VectorStore,
-) -> io::Result<Option<HnswIndex>> {
-    let read_file = File::options().read(true).open(&path);
-    if read_file
-        .as_ref()
-        .is_err_and(|e| e.kind() == io::ErrorKind::NotFound)
-    {
-        return Ok(None);
-    }
-    let read_file = read_file?;
-    let hnsw: HnswStorageIndex = serde_json::from_reader(read_file).unwrap();
-    let hnsw = hnsw.transform_features(|t| Point::Stored {
-        id: t.id,
-        vec: vector_store.get_vec(domain, t.index).unwrap().unwrap(),
-    });
-    Ok(Some(hnsw))
+pub fn deserialize_index<P: AsRef<Path>>(path: P) -> Result<Option<HnswIndex>, SerializationError> {
+    Hnsw::deserialize(path)
 }
 
 #[cfg(test)]

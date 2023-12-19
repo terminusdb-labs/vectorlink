@@ -1,6 +1,9 @@
-use std::sync::Arc;
+use serde::{Deserialize, Serialize};
+use std::fs::OpenOptions;
+use std::io::{Read, Write};
+use std::{path::Path, sync::Arc};
 
-use parallel_hnsw::{AbstractVector, Comparator};
+use parallel_hnsw::{AbstractVector, Comparator, SerializationError};
 
 use crate::{
     vecmath::{normalized_cosine_distance, Embedding},
@@ -11,6 +14,13 @@ use crate::{
 pub struct OpenAIComparator {
     pub domain: Arc<Domain>,
     pub store: Arc<VectorStore>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ComparatorMeta {
+    domain: String,
+    vector_store_path: String,
+    size: usize,
 }
 
 impl Comparator<Embedding> for OpenAIComparator {
@@ -36,5 +46,39 @@ impl Comparator<Embedding> for OpenAIComparator {
             AbstractVector::Unstored(v) => v,
         };
         normalized_cosine_distance(v1, v2)
+    }
+
+    fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
+        let mut comparator_file: std::fs::File =
+            OpenOptions::new().write(true).create(true).open(path)?;
+        let domain = self.domain.name();
+        let vector_store_path = self.store.dir();
+        // How do we get this value?
+        let size = 2_000_000;
+        let comparator = ComparatorMeta {
+            domain,
+            vector_store_path,
+            size,
+        };
+        let comparator_meta = serde_json::to_string(&comparator)?;
+        comparator_file.write_all(&comparator_meta.into_bytes())?;
+        Ok(())
+    }
+
+    fn deserialize<P: AsRef<Path>>(path: P) -> Result<Self, SerializationError> {
+        let mut comparator_file = OpenOptions::new().read(true).open(path)?;
+        let mut contents = String::new();
+        comparator_file.read_to_string(&mut contents)?;
+        let ComparatorMeta {
+            domain,
+            vector_store_path,
+            size,
+        } = serde_json::from_str(&contents)?;
+        let store = VectorStore::new(&vector_store_path, size);
+        let domain = store.get_domain(&domain)?;
+        Ok(OpenAIComparator {
+            domain,
+            store: store.into(),
+        })
     }
 }
