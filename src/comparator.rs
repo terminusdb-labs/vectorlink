@@ -52,7 +52,6 @@ impl Comparator<Embedding> for OpenAIComparator {
         let mut comparator_file: std::fs::File =
             OpenOptions::new().write(true).create(true).open(path)?;
         let domain = self.domain.name();
-        let vector_store_path = self.store.dir();
         // How do we get this value?
         let size = 2_000_000;
         let comparator = ComparatorMeta {
