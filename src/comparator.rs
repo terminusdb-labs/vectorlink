@@ -51,6 +51,7 @@ impl Comparator<Embedding> for OpenAIComparator {
     fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
         let mut comparator_file: std::fs::File =
             OpenOptions::new().write(true).create(true).open(path)?;
+        eprintln!("opened comparator serialize file");
         let domain = self.domain.name();
         // How do we get this value?
         let size = 2_000_000;
@@ -59,7 +60,9 @@ impl Comparator<Embedding> for OpenAIComparator {
             size,
         };
         let comparator_meta = serde_json::to_string(&comparator)?;
+        eprintln!("serialized comparator");
         comparator_file.write_all(&comparator_meta.into_bytes())?;
+        eprintln!("wrote comparator to file");
         Ok(())
     }
 
