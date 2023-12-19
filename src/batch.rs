@@ -15,6 +15,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader},
 };
 use tokio_stream::wrappers::LinesStream;
+use urlencoding::encode;
 
 use crate::{
     comparator::OpenAIComparator,
@@ -289,7 +290,7 @@ pub async fn index_from_operations_file<P: AsRef<Path>>(
 ) -> Result<(), BatchError> {
     let mut staging_path: PathBuf = vectorlink_path.as_ref().into();
     staging_path.push(".staging");
-    staging_path.push(domain);
+    staging_path.push(&*encode(domain));
     tokio::fs::create_dir_all(&staging_path).await?;
 
     let mut vector_path = staging_path.clone();
