@@ -246,17 +246,9 @@ pub async fn index_using_operations_and_vectors<
         hnsw = deserialize_index(&final_file, &domain_obj, &index_id, &vs)?
             .unwrap_or_else(|| HnswIndex::new(OpenAI));
     }*/
-    let mut vecs: Vec<VectorId> = Vec::new();
     while let Some(op) = op_stream.next().await {
-        if i < start_at {
-            i += 1;
-            continue;
-        }
-
         match op.unwrap() {
-            Operation::Inserted { .. } => {
-                vecs.push(VectorId(i));
-            }
+            Operation::Inserted { .. } => i += 1,
             Operation::Changed { .. } => {
                 todo!()
             }
@@ -267,25 +259,17 @@ pub async fn index_using_operations_and_vectors<
                 panic!("Error in indexing {message}");
             }
         }
-        i += 1;
-        /*
-           if i % INDEX_CHECKPOINT_SIZE == 0 {
-               eprintln!("Checkpointing index at {i}...");
-               progress_file.seek(SeekFrom::Start(0)).await?;
-               progress_file.write_u64(i as u64).await?;
-               progress_file.sync_data().await?;
-               serialize_index(&temp_file, hnsw.clone())?;
-               tokio::fs::rename(&temp_file, &staging_file).await?;
-               eprintln!("Checkpoint complete");
-           }
-        */
     }
     let comparator = OpenAIComparator {
         domain: domain_obj.clone(),
         store: Arc::new(vs),
     };
+    let vecs: Vec<_> = (offset as usize..(offset as usize + i))
+        .map(VectorId)
+        .collect();
     let hnsw = Hnsw::generate(comparator, vecs, 24, 48);
-    tokio::fs::rename(staging_file, final_file).await?;
+    let _res = hnsw.serialize(&staging_file);
+    tokio::fs::rename(&staging_file, final_file).await?;
     Ok(())
 }
 
