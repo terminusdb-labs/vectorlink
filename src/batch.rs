@@ -232,7 +232,7 @@ pub async fn index_using_operations_and_vectors<
     let mut op_file = File::open(&op_file_path).await?;
     let mut op_stream = get_operations_from_file(&mut op_file).await?;
     let start_at: usize = offset as usize;
-    let mut i: usize = start_at;
+    let mut i: usize = 0;
     let temp_file_name = "temp_index";
     let index_file_name = "index";
     //    let temp_file = index_serialization_path(&staging_path, temp_file_name);
@@ -249,8 +249,10 @@ pub async fn index_using_operations_and_vectors<
     let mut vecs: Vec<VectorId> = Vec::new();
     while let Some(op) = op_stream.next().await {
         if i < start_at {
+            i += 1;
             continue;
         }
+
         match op.unwrap() {
             Operation::Inserted { .. } => {
                 vecs.push(VectorId(i));
