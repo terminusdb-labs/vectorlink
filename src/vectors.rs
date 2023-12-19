@@ -210,6 +210,7 @@ impl PageArena {
         }
         // TODO would be much better if we could have uninit allocs.
         let mut free = self.free.lock().unwrap();
+        free.reserve(count);
         let zeroed = Box::new([0.0f32; VECTOR_PAGE_FLOAT_SIZE]);
         for _ in 0..count - 1 {
             free.push(zeroed.clone());
