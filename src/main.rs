@@ -1,5 +1,7 @@
+use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::Path;
+use std::sync::Arc;
 
 mod batch;
 mod comparator;
@@ -18,11 +20,17 @@ use indexer::Point;
 use indexer::{index_serialization_path, serialize_index};
 use indexer::{operations_to_point_operations, OpenAI};
 use itertools::Itertools;
-use parallel_hnsw::Hnsw;
+use parallel_hnsw::{AbstractVector, Hnsw, VectorId};
+use rand::thread_rng;
+use rand::*;
 use server::Operation;
 use space::Metric;
 use std::fs::File;
 use std::io::{self, BufRead};
+
+use rayon::prelude::*;
+
+use crate::indexer::deserialize_index;
 
 use {
     indexer::{create_index_name, HnswIndex},
@@ -102,6 +110,16 @@ enum Commands {
         s2: String,
         #[arg(short, long, value_enum, default_value_t=DistanceVariant::Default)]
         variant: DistanceVariant,
+    },
+    TestRecall {
+        #[arg(short, long)]
+        commit: String,
+        #[arg(long)]
+        domain: String,
+        #[arg(short, long)]
+        directory: String,
+        #[arg(short, long, default_value_t = 10000)]
+        size: usize,
     },
     Test {
         #[arg(short, long)]
@@ -258,10 +276,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             size,
             commit,
         } => {
+            eprintln!("starting load");
             let key = key_or_env(key);
             index_from_operations_file(&key, input, directory, &domain, &commit, size)
                 .await
                 .unwrap()
+        }
+        Commands::TestRecall {
+            domain,
+            directory,
+            size,
+            commit,
+        } => {
+            eprintln!("Testing recall");
+            let dirpath = Path::new(&directory);
+            let store = VectorStore::new(dirpath, size);
+            let hnsw_index_path = create_index_name(&domain, &commit);
+            let hnsw: HnswIndex = deserialize_index(hnsw_index_path, Arc::new(store))
+                .unwrap()
+                .unwrap();
+            let mut rng = thread_rng();
+            let num = hnsw.vector_count();
+            let max = (0.001 * num as f32) as usize;
+            let mut seen = HashSet::new();
+            let vecs_to_find: Vec<VectorId> = (0..max)
+                .map(|_| {
+                    let vid: VectorId;
+                    loop {
+                        let v = VectorId(rng.gen_range(0..num));
+                        if seen.insert(v) {
+                            vid = v;
+                            break;
+                        }
+                    }
+                    vid
+                })
+                .collect();
+            let relevant: usize = vecs_to_find
+                .into_par_iter()
+                .map(|vid| {
+                    let res = hnsw.search(AbstractVector::Stored(vid), 100);
+                    if res.iter().map(|(v, _)| v).any(|v| *v == vid) {
+                        1
+                    } else {
+                        0
+                    }
+                })
+                .sum();
+            let recall = relevant as f32 / max as f32;
+            eprintln!("Recall: {recall}");
         }
     }
 
