@@ -319,7 +319,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let relevant: usize = vecs_to_find
                 .par_iter()
                 .filter(|vid| {
-                    let res = hnsw.search(AbstractVector::Stored(**vid), 200);
+                    let res = hnsw.search(AbstractVector::Stored(**vid), 400);
                     res.iter().map(|(v, _)| v).any(|v| v == *vid)
                 })
                 .count();
