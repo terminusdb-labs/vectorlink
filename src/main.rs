@@ -131,7 +131,7 @@ enum Commands {
         #[arg(short, long, default_value_t = 10000)]
         size: usize,
         #[arg(short, long, default_value_t = 0)]
-        layer,
+        layer: usize,
     },
     Test {
         #[arg(short, long)]
