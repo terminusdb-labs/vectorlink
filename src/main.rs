@@ -402,7 +402,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .map(|node| {
                     (
                         *node,
-                        hnsw.reachables_from_node_for_layer(0, *node, &unreachables[..]),
+                        hnsw.reachables_from_node_for_layer(
+                            hnsw.layer_count() - 1,
+                            *node,
+                            &unreachables[..],
+                        ),
                     )
                 })
                 .collect();
