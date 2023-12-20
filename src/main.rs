@@ -393,7 +393,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             eprintln!("variance: {variance}");
 
-            for x in bottom_distances.iter().skip(unreachables.len()).take(10) {
+            for x in bottom_distances.iter().skip(unreachables.len()).take(250) {
                 eprintln!(" {} has distance {}", x.0, x.1);
             }
         }
