@@ -20,7 +20,7 @@ use indexer::Point;
 use indexer::{index_serialization_path, serialize_index};
 use indexer::{operations_to_point_operations, OpenAI};
 use itertools::Itertools;
-use parallel_hnsw::{AbstractVector, Hnsw, VectorId};
+use parallel_hnsw::{AbstractVector, Hnsw, NodeDistance, VectorId};
 use rand::thread_rng;
 use rand::*;
 use server::Operation;
@@ -112,6 +112,16 @@ enum Commands {
         variant: DistanceVariant,
     },
     TestRecall {
+        #[arg(short, long)]
+        commit: String,
+        #[arg(long)]
+        domain: String,
+        #[arg(short, long)]
+        directory: String,
+        #[arg(short, long, default_value_t = 10000)]
+        size: usize,
+    },
+    Diagnostics {
         #[arg(short, long)]
         commit: String,
         #[arg(long)]
@@ -325,6 +335,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .count();
             let recall = relevant as f32 / max as f32;
             eprintln!("Recall: {recall}");
+        }
+        Commands::Diagnostics {
+            domain,
+            directory,
+            size,
+            commit,
+        } => {
+            let dirpath = Path::new(&directory);
+            let hnsw_index_path = dbg!(format!(
+                "{}/{}.hnsw",
+                directory,
+                create_index_name(&domain, &commit)
+            ));
+            let store = VectorStore::new(dirpath, size);
+            let hnsw: HnswIndex = deserialize_index(hnsw_index_path, Arc::new(store))
+                .unwrap()
+                .unwrap();
+
+            let bottom_distances: Vec<NodeDistance> =
+                hnsw.node_distances_for_layer(hnsw.layer_count() - 1);
+
+            let mut bottom_distances: Vec<(usize, usize)> = bottom_distances
+                .into_iter()
+                .enumerate()
+                .map(|(ix, d)| (ix, d.index_sum))
+                .collect();
+
+            bottom_distances.sort_by_key(|(_, d)| usize::MAX - d);
+            let mean = bottom_distances.iter().map(|(_, d)| d).sum::<usize>() as f32
+                / bottom_distances.len() as f32;
+            eprintln!("mean: {mean}");
+
+            let variance = bottom_distances
+                .iter()
+                .map(|(_, d)| {
+                    let d = *d as f32;
+                    let diff = if d > mean { d - mean } else { mean - d };
+                    diff * diff
+                })
+                .sum::<f32>()
+                / bottom_distances.len() as f32;
+
+            eprintln!("variance: {variance}");
+
+            for x in bottom_distances.iter().take(10) {
+                eprintln!(" {} has distance {}", x.0, x.1);
+            }
         }
     }
 

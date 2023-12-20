@@ -19,7 +19,8 @@ lazy_static = "1.4"
 bytes = "1.4"
 clap = {version = "4.2", features=["derive"]}
 hnsw = { git = "https://github.com/terminusdb-labs/terminusdb-hnsw", features=["serde1"] }
-parallel-hnsw = { git = "ssh://git@github.com/terminusdb-labs/parallel-hnsw" }
+#parallel-hnsw = { git = "ssh://git@github.com/terminusdb-labs/parallel-hnsw" }
+parallel-hnsw = { path = "../parallel-hnsw" }
 serde_json= "1.0"
 serde = {version="1.0", features=["derive"]}
 thiserror = "1.0"

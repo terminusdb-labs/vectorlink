@@ -942,7 +942,6 @@ dependencies = [
 [[package]]
 name = "parallel-hnsw"
 version = "0.1.0"
-source = "git+ssh://git@github.com/terminusdb-labs/parallel-hnsw#8de7ba4ce66824d929c9a465a7930a2305e065bb"
 dependencies = [
  "itertools 0.12.0",
  "rand",
