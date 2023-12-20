@@ -290,8 +290,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         } => {
             eprintln!("Testing recall");
             let dirpath = Path::new(&directory);
+            let hnsw_index_path = dbg!(format!(
+                "{}/{}.hnsw",
+                directory,
+                create_index_name(&domain, &commit)
+            ));
             let store = VectorStore::new(dirpath, size);
-            let hnsw_index_path = create_index_name(&domain, &commit) + ".hnsw";
             let hnsw: HnswIndex = deserialize_index(hnsw_index_path, Arc::new(store))
                 .unwrap()
                 .unwrap();
