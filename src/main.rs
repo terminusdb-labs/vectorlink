@@ -130,6 +130,8 @@ enum Commands {
         directory: String,
         #[arg(short, long, default_value_t = 10000)]
         size: usize,
+        #[arg(short, long, default_value_t = 0)]
+        layer,
     },
     Test {
         #[arg(short, long)]
@@ -341,6 +343,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             directory,
             size,
             commit,
+            layer,
         } => {
             let dirpath = Path::new(&directory);
             let hnsw_index_path = dbg!(format!(
@@ -354,7 +357,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .unwrap();
 
             let bottom_distances: Vec<NodeDistance> =
-                hnsw.node_distances_for_layer(hnsw.layer_count() - 1);
+                hnsw.node_distances_for_layer(hnsw.layer_count() - 1 - layer);
 
             let mut bottom_distances: Vec<(NodeId, usize)> = bottom_distances
                 .into_iter()
@@ -403,7 +406,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     (
                         *node,
                         hnsw.reachables_from_node_for_layer(
-                            hnsw.layer_count() - 1,
+                            hnsw.layer_count() - 1 - layer,
                             *node,
                             &unreachables[..],
                         ),
