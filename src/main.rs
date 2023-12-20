@@ -363,19 +363,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .collect();
 
             bottom_distances.sort_by_key(|(_, d)| usize::MAX - d);
-            let mean = bottom_distances.iter().map(|(_, d)| d).sum::<usize>() as f32
-                / bottom_distances.len() as f32;
+
+            let unreachables: Vec<_> = bottom_distances
+                .iter()
+                .take_while(|(_, d)| *d == !0)
+                .cloned()
+                .collect();
+
+            eprintln!("unreachables: {}", unreachables.len());
+
+            let mean = bottom_distances
+                .iter()
+                .skip(unreachables.len())
+                .map(|(_, d)| d)
+                .sum::<usize>() as f32
+                / (bottom_distances.len() - unreachables.len()) as f32;
             eprintln!("mean: {mean}");
 
             let variance = bottom_distances
                 .iter()
+                .skip(unreachables.len())
                 .map(|(_, d)| {
                     let d = *d as f32;
                     let diff = if d > mean { d - mean } else { mean - d };
                     diff * diff
                 })
                 .sum::<f32>()
-                / bottom_distances.len() as f32;
+                / (bottom_distances.len() - unreachables.len()) as f32;
 
             eprintln!("variance: {variance}");
 
