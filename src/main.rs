@@ -20,7 +20,7 @@ use indexer::Point;
 use indexer::{index_serialization_path, serialize_index};
 use indexer::{operations_to_point_operations, OpenAI};
 use itertools::Itertools;
-use parallel_hnsw::{AbstractVector, Hnsw, NodeDistance, VectorId};
+use parallel_hnsw::{AbstractVector, Hnsw, NodeDistance, NodeId, VectorId};
 use rand::thread_rng;
 use rand::*;
 use server::Operation;
@@ -356,18 +356,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let bottom_distances: Vec<NodeDistance> =
                 hnsw.node_distances_for_layer(hnsw.layer_count() - 1);
 
-            let mut bottom_distances: Vec<(usize, usize)> = bottom_distances
+            let mut bottom_distances: Vec<(NodeId, usize)> = bottom_distances
                 .into_iter()
                 .enumerate()
-                .map(|(ix, d)| (ix, d.index_sum))
+                .map(|(ix, d)| (NodeId(ix), d.index_sum))
                 .collect();
 
             bottom_distances.sort_by_key(|(_, d)| usize::MAX - d);
 
-            let unreachables: Vec<_> = bottom_distances
+            let unreachables: Vec<NodeId> = bottom_distances
                 .iter()
                 .take_while(|(_, d)| *d == !0)
-                .cloned()
+                .map(|(n, _)| *n)
                 .collect();
 
             eprintln!("unreachables: {}", unreachables.len());
@@ -394,8 +394,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             eprintln!("variance: {variance}");
 
             for x in bottom_distances.iter().skip(unreachables.len()).take(250) {
-                eprintln!(" {} has distance {}", x.0, x.1);
+                eprintln!(" {} has distance {}", x.0 .0, x.1);
             }
+
+            let mut clusters: Vec<_> = unreachables
+                .par_iter()
+                .map(|node| {
+                    (
+                        *node,
+                        hnsw.reachables_from_node_for_layer(0, *node, &unreachables[..]),
+                    )
+                })
+                .collect();
+
+            clusters.sort_by_key(|c| usize::MAX - c.1.len());
+
+            for x in clusters.iter().take(250) {
+                eprintln!(
+                    " from {} we reach {} previously unreachables",
+                    x.0 .0,
+                    x.1.len()
+                );
+            }
+
+            // take first from unreachables
+            // figure out its neighbors and if they are also unreachables
         }
     }
 
