@@ -317,16 +317,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 })
                 .collect();
             let relevant: usize = vecs_to_find
-                .into_par_iter()
-                .map(|vid| {
-                    let res = hnsw.search(AbstractVector::Stored(vid), 100);
-                    if res.iter().map(|(v, _)| v).any(|v| *v == vid) {
-                        1
-                    } else {
-                        0
-                    }
+                .par_iter()
+                .filter(|vid| {
+                    let res = hnsw.search(AbstractVector::Stored(**vid), 100);
+                    res.iter().map(|(v, _)| v).any(|v| v == *vid)
                 })
-                .sum();
+                .count();
             let recall = relevant as f32 / max as f32;
             eprintln!("Recall: {recall}");
         }
