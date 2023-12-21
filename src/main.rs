@@ -400,7 +400,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 eprintln!(" {} has distance {}", x.0 .0, x.1);
             }
 
-            let mut clusters: Vec<_> = unreachables
+            let mut clusters: Vec<(NodeId, Vec<(NodeId, usize)>)> = unreachables
                 .par_iter()
                 .map(|node| {
                     (
@@ -426,6 +426,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             // take first from unreachables
             // figure out its neighbors and if they are also unreachables
+            let mut cluster_queue: Vec<_> = clusters.iter().map(Some).collect();
+            cluster_queue.reverse();
+            while let Some(next) = cluster_queue.pop() {
+                if let Some((nodeid, _)) = next {
+                    for other in cluster_queue.iter_mut() {
+                        if let Some((_, other_distances)) = other {
+                            if other_distances.iter().any(|(n, _)| nodeid == n) {
+                                *other = None
+                            }
+                        }
+                    }
+                }
+            }
+            let nodes_to_promote: Vec<NodeId> =
+                cluster_queue.iter().flat_map(|x| x.map(|c| c.0)).collect();
+            eprintln!("Nodes to promote: {nodes_to_promote:?}");
         }
     }
 
