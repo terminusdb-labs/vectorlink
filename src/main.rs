@@ -427,6 +427,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             // take first from unreachables
             // figure out its neighbors and if they are also unreachables
             let mut cluster_queue: Vec<_> = clusters.iter().map(Some).collect();
+            cluster_queue.reverse();
             let mut nodes_to_promote: Vec<NodeId> = Vec::new();
             while let Some(next) = cluster_queue.pop() {
                 if let Some((nodeid, _)) = next {
