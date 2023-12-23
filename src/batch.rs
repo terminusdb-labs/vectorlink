@@ -270,7 +270,7 @@ pub async fn index_using_operations_and_vectors<
         .collect();
 
     eprintln!("ready to generate hnsw");
-    let hnsw = Hnsw::generate(comparator, vecs, 24, 48);
+    let hnsw = Hnsw::generate(comparator, vecs, 30, 60);
     eprintln!("done generating hnsw");
     hnsw.serialize(&staging_file).unwrap();
     eprintln!("done serializing hnsw");
