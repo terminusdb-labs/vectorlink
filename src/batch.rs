@@ -237,8 +237,8 @@ pub async fn index_using_operations_and_vectors<
     let temp_file_name = "temp_index";
     let index_file_name = "index";
     //    let temp_file = index_serialization_path(&staging_path, temp_file_name);
-    let staging_file = index_serialization_path(&staging_path, index_file_name);
-    let final_file = index_serialization_path(&vectorlink_path, domain);
+    let staging_file = index_serialization_path(&staging_path, index_file_name, commit);
+    let final_file = index_serialization_path(&vectorlink_path, domain, commit);
     /*
     let mut hnsw: HnswIndex;
     if let Some(index) = deserialize_index(&staging_file, &domain_obj, &index_id, &vs)? {
