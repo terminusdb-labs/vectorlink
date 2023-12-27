@@ -224,10 +224,9 @@ pub fn search(p: &Point, mut num: usize, hnsw: &HnswIndex) -> Vec<PointQuery> {
     points
 }
 
-pub fn index_serialization_path<P: AsRef<Path>>(path: P, name: &str, commit: &str) -> PathBuf {
-    let name = encode(name);
+pub fn index_serialization_path<P: AsRef<Path>>(path: P, name: &str) -> PathBuf {
     let mut path: PathBuf = path.as_ref().into();
-    path.push(format!("{name}@{commit}.hnsw"));
+    path.push(format!("{name}.hnsw"));
     path
 }
 

@@ -237,8 +237,9 @@ pub async fn index_using_operations_and_vectors<
     let temp_file_name = "temp_index";
     let index_file_name = "index";
     //    let temp_file = index_serialization_path(&staging_path, temp_file_name);
-    let staging_file = index_serialization_path(&staging_path, index_file_name, commit);
-    let final_file = index_serialization_path(&vectorlink_path, domain, commit);
+    let staging_file = index_serialization_path(&staging_path, index_file_name);
+    let index_name = create_index_name(domain, commit);
+    let final_file = index_serialization_path(&vectorlink_path, &index_name);
     /*
     let mut hnsw: HnswIndex;
     if let Some(index) = deserialize_index(&staging_file, &domain_obj, &index_id, &vs)? {
@@ -270,7 +271,7 @@ pub async fn index_using_operations_and_vectors<
         .collect();
 
     eprintln!("ready to generate hnsw");
-    let hnsw = Hnsw::generate(comparator, vecs, 24, 48);
+    let hnsw = Hnsw::generate(comparator, vecs, 48, 96);
     eprintln!("done generating hnsw");
     hnsw.serialize(&staging_file).unwrap();
     eprintln!("done serializing hnsw");
