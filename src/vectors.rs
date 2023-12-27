@@ -53,8 +53,8 @@ impl Domain {
 
     fn open(dir: &Path, name: &str, index: usize) -> io::Result<Self> {
         let mut path = dir.to_path_buf();
-        let name = encode(name);
-        path.push(format!("{name}.vecs"));
+        let encoded_name = encode(name);
+        path.push(format!("{encoded_name}.vecs"));
         let mut write_file = File::options()
             .read(true)
             .write(true)
@@ -63,7 +63,7 @@ impl Domain {
             .open(dbg!(&path))?;
         let pos = write_file.seek(SeekFrom::End(0))?;
         if pos as usize % EMBEDDING_BYTE_LENGTH != 0 {
-            panic!("domain {name} has unexpected length");
+            panic!("domain {encoded_name} has unexpected length");
         }
         let num_vecs = AtomicUsize::new(pos as usize / EMBEDDING_BYTE_LENGTH);
         let write_file = Mutex::new(write_file);
