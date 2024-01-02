@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 use std::io::ErrorKind;
+use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
-
 mod batch;
 mod comparator;
 mod indexer;
@@ -20,7 +20,7 @@ use indexer::Point;
 use indexer::{index_serialization_path, serialize_index};
 use indexer::{operations_to_point_operations, OpenAI};
 use itertools::Itertools;
-use parallel_hnsw::{AbstractVector, Hnsw, NodeDistance, NodeId, VectorId};
+use parallel_hnsw::{AbstractVector, AllVectorIterator, Hnsw, NodeDistance, NodeId, VectorId};
 use rand::thread_rng;
 use rand::*;
 use server::Operation;
@@ -132,6 +132,20 @@ enum Commands {
         size: usize,
         #[arg(short, long, default_value_t = 0)]
         layer: usize,
+    },
+    Duplicates {
+        #[arg(short, long)]
+        commit: String,
+        #[arg(long)]
+        domain: String,
+        #[arg(short, long)]
+        directory: String,
+        #[arg(short, long, default_value_t = 10000)]
+        size: usize,
+        #[arg(short, long, default_value_t = 10)]
+        candidates: usize,
+        #[arg(short, long, default_value_t = 0.01_f32)]
+        threshold: f32,
     },
     Test {
         #[arg(short, long)]
@@ -442,6 +456,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
             }
             eprintln!("Nodes to promote: {nodes_to_promote:?}");
+        }
+        Commands::Duplicates {
+            commit,
+            domain,
+            size,
+            candidates,
+            directory,
+            threshold,
+        } => {
+            let dirpath = Path::new(&directory);
+            let hnsw_index_path = dbg!(format!(
+                "{}/{}.hnsw",
+                directory,
+                create_index_name(&domain, &commit)
+            ));
+            let store = VectorStore::new(dirpath, size);
+            let hnsw: HnswIndex = deserialize_index(hnsw_index_path, Arc::new(store))
+                .unwrap()
+                .unwrap();
+
+            let elts: AllVectorIterator<'_> = hnsw.all_vectors();
+            let stdout = std::io::stdout();
+            elts.par_bridge().for_each(|i| {
+                let current_point = AbstractVector::Stored(i);
+                let results = hnsw.search(current_point, candidates + 1);
+                let mut cluster = Vec::new();
+                for result in results.iter() {
+                    if result.0 != i && result.0 .0 != !0 {
+                        let distance = result.1;
+                        if distance < threshold {
+                            cluster.push((result.0 .0, distance))
+                        }
+                    }
+                }
+                let mut lock = stdout.lock();
+                writeln!(lock, "{}: {:?}", i.0, cluster).unwrap();
+            });
         }
     }
 
