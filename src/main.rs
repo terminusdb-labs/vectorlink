@@ -142,7 +142,7 @@ enum Commands {
         directory: String,
         #[arg(short, long, default_value_t = 10000)]
         size: usize,
-        #[arg(short, long, default_value_t = 10)]
+        #[arg(short, long, default_value_t = 100)]
         candidates: usize,
         #[arg(short, long, default_value_t = 0.01_f32)]
         threshold: f32,
@@ -490,8 +490,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         }
                     }
                 }
+                let cluster = serde_json::to_string(&cluster);
                 let mut lock = stdout.lock();
-                writeln!(lock, "{}: {:?}", i.0, cluster).unwrap();
+                writeln!(lock, "[{}, {:?}]", i.0, cluster).unwrap();
             });
         }
     }
