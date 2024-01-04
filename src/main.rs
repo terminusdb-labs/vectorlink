@@ -490,9 +490,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         }
                     }
                 }
-                let cluster = serde_json::to_string(&cluster);
+                let cluster = serde_json::to_string(&cluster).unwrap();
                 let mut lock = stdout.lock();
-                writeln!(lock, "[{}, {:?}]", i.0, cluster).unwrap();
+                writeln!(lock, "[{}, {}]", i.0, cluster).unwrap();
             });
         }
     }
