@@ -213,7 +213,7 @@ impl PointQuery {
 
 pub fn search(p: &Point, mut num: usize, hnsw: &HnswIndex) -> Vec<PointQuery> {
     let ef = num.max(100);
-    let output = hnsw.search(p.abstract_vector(), ef);
+    let output = hnsw.search(p.abstract_vector(), ef, 2);
     let points = output
         .into_iter()
         .map(|elt| PointQuery {

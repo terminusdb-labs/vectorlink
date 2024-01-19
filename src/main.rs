@@ -345,7 +345,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let relevant: usize = vecs_to_find
                 .par_iter()
                 .filter(|vid| {
-                    let res = hnsw.search(AbstractVector::Stored(**vid), 3200);
+                    let res = hnsw.search(AbstractVector::Stored(**vid), 3200, 2);
                     res.iter().map(|(v, _)| v).any(|v| v == *vid)
                 })
                 .count();
@@ -480,7 +480,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let stdout = std::io::stdout();
             elts.par_bridge().for_each(|i| {
                 let current_point = AbstractVector::Stored(i);
-                let results = hnsw.search(current_point, candidates + 1);
+                let results = hnsw.search(current_point, candidates + 1, 2);
                 let mut cluster = Vec::new();
                 for result in results.iter() {
                     if result.0 != i && result.0 .0 != !0 {
