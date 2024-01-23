@@ -3,8 +3,9 @@ use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::{path::Path, sync::Arc};
 
-use parallel_hnsw::{AbstractVector, Comparator, SerializationError};
+use parallel_hnsw::{AbstractVector, Comparator, Serializable, SerializationError, VectorId};
 
+use crate::vectors::LoadedVec;
 use crate::{
     vecmath::{normalized_cosine_distance, Embedding},
     vectors::{Domain, VectorStore},
@@ -22,32 +23,21 @@ pub struct ComparatorMeta {
     size: usize,
 }
 
-impl Comparator<Embedding> for OpenAIComparator {
-    type Params = Arc<VectorStore>;
-    fn compare_vec(&self, v1: AbstractVector<Embedding>, v2: AbstractVector<Embedding>) -> f32 {
-        #[allow(unused_assignments)]
-        let mut v1_opt = None;
-        #[allow(unused_assignments)]
-        let mut v2_opt = None;
-        let v1 = match v1 {
-            AbstractVector::Stored(vid) => {
-                let loaded = self.store.get_vec(&self.domain, vid.0).unwrap().unwrap();
-                v1_opt = Some(loaded);
-                &**v1_opt.as_ref().unwrap()
-            }
-            AbstractVector::Unstored(v) => v,
-        };
-        let v2 = match v2 {
-            AbstractVector::Stored(vid) => {
-                let loaded = self.store.get_vec(&self.domain, vid.0).unwrap().unwrap();
-                v2_opt = Some(loaded);
-                &**v2_opt.as_ref().unwrap()
-            }
-            AbstractVector::Unstored(v) => v,
-        };
-        normalized_cosine_distance(v1, v2)
+impl Comparator for OpenAIComparator {
+    type T = Embedding;
+    type Borrowable<'a> = LoadedVec
+        where Self: 'a;
+    fn lookup(&self, v: VectorId) -> LoadedVec {
+        self.store.get_vec(&self.domain, v.0).unwrap().unwrap()
     }
 
+    fn compare_raw(&self, v1: &Embedding, v2: &Embedding) -> f32 {
+        normalized_cosine_distance(v1, v2)
+    }
+}
+
+impl Serializable for OpenAIComparator {
+    type Params = Arc<VectorStore>;
     fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
         let mut comparator_file: std::fs::File =
             OpenOptions::new().write(true).create(true).open(path)?;

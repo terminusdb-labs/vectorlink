@@ -20,7 +20,7 @@ use thiserror::Error;
 use tokio::task::JoinError;
 use urlencoding::{decode, encode};
 
-pub type HnswIndex = Hnsw<OpenAIComparator, Embedding>;
+pub type HnswIndex = Hnsw<OpenAIComparator>;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq)]
