@@ -151,6 +151,20 @@ enum Commands {
         #[arg(short, long)]
         key: Option<String>,
     },
+    ImproveIndex {
+        #[arg(short, long)]
+        commit: String,
+        #[arg(long)]
+        domain: String,
+        #[arg(short, long)]
+        directory: String,
+        #[arg(short, long, default_value_t = 10000)]
+        size: usize,
+        #[arg(short, long)]
+        improve_neighbors: Option<f32>,
+        #[arg(short, long)]
+        promote: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -494,6 +508,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 let mut lock = stdout.lock();
                 writeln!(lock, "[{}, {}]", i.0, cluster).unwrap();
             });
+        }
+        Commands::ImproveIndex {
+            commit,
+            domain,
+            directory,
+            size,
+            improve_neighbors,
+            promote,
+        } => {
+            let dirpath = Path::new(&directory);
+            let hnsw_index_path = dbg!(format!(
+                "{}/{}.hnsw",
+                directory,
+                create_index_name(&domain, &commit)
+            ));
+            let store = VectorStore::new(dirpath, size);
+            let mut hnsw: HnswIndex = deserialize_index(&hnsw_index_path, Arc::new(store))
+                .unwrap()
+                .unwrap();
+
+            if let Some(threshold) = improve_neighbors {
+                hnsw.improve_neighbors(threshold);
+                // TODO should write to staging first
+                hnsw.serialize(hnsw_index_path);
+            } else {
+                todo!();
+            }
         }
     }
 
