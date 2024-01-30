@@ -145,8 +145,6 @@ enum Commands {
         take: Option<usize>,
         #[arg(short, long, default_value_t = 10000)]
         size: usize,
-        #[arg(short, long, default_value_t = 100)]
-        candidates: usize,
         #[arg(short, long, default_value_t = 1.0_f32)]
         threshold: f32,
     },
@@ -478,7 +476,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             commit,
             domain,
             size,
-            candidates,
             take,
             directory,
             threshold,
@@ -495,9 +492,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .unwrap();
 
             let elts = if let Some(take) = take {
-                Either::Left(hnsw.knn(candidates, 1).take_any(take))
+                Either::Left(hnsw.threshold_nn(threshold, 2).take_any(take))
             } else {
-                Either::Right(hnsw.knn(candidates, 1))
+                Either::Right(hnsw.threshold_nn(threshold, 2))
             };
             let stdout = std::io::stdout();
             elts.for_each(|(v, results)| {
