@@ -28,6 +28,7 @@ use space::Metric;
 use std::fs::File;
 use std::io::{self, BufRead};
 
+use rayon::iter::Either;
 use rayon::prelude::*;
 
 use crate::indexer::deserialize_index;
@@ -140,11 +141,13 @@ enum Commands {
         domain: String,
         #[arg(short, long)]
         directory: String,
+        #[arg(short, long)]
+        take: Option<usize>,
         #[arg(short, long, default_value_t = 10000)]
         size: usize,
         #[arg(short, long, default_value_t = 100)]
         candidates: usize,
-        #[arg(short, long, default_value_t = 0.01_f32)]
+        #[arg(short, long, default_value_t = 1.0_f32)]
         threshold: f32,
     },
     Test {
@@ -476,6 +479,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             domain,
             size,
             candidates,
+            take,
             directory,
             threshold,
         } => {
@@ -490,23 +494,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .unwrap()
                 .unwrap();
 
-            let elts: AllVectorIterator<'_> = hnsw.all_vectors();
+            let elts = if let Some(take) = take {
+                Either::Left(hnsw.knn(candidates, 1).take_any(take))
+            } else {
+                Either::Right(hnsw.knn(candidates, 1))
+            };
             let stdout = std::io::stdout();
-            elts.par_bridge().for_each(|i| {
-                let current_point = AbstractVector::Stored(i);
-                let results = hnsw.search(current_point, candidates + 1, 2);
+            elts.for_each(|(v, results)| {
                 let mut cluster = Vec::new();
                 for result in results.iter() {
-                    if result.0 != i && result.0 .0 != !0 {
-                        let distance = result.1;
-                        if distance < threshold {
-                            cluster.push((result.0 .0, distance))
-                        }
+                    let distance = result.1;
+                    if distance < threshold {
+                        cluster.push((result.0 .0, distance))
                     }
                 }
                 let cluster = serde_json::to_string(&cluster).unwrap();
                 let mut lock = stdout.lock();
-                writeln!(lock, "[{}, {}]", i.0, cluster).unwrap();
+                writeln!(lock, "[{}, {}]", v.0, cluster).unwrap();
             });
         }
         Commands::ImproveIndex {
