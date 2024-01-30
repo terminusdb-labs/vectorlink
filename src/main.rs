@@ -492,7 +492,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .unwrap();
 
             let elts = if let Some(take) = take {
-                Either::Left(hnsw.threshold_nn(threshold, 2).take(take))
+                Either::Left(hnsw.threshold_nn(threshold, 2).take_any(take))
             } else {
                 Either::Right(hnsw.threshold_nn(threshold, 2))
             };
