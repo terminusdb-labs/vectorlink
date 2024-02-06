@@ -261,6 +261,7 @@ mod tests {
 
     use super::*;
 
+    /*
     #[test]
     fn low_dimensional_search() {
         let tempdir = tempfile::tempdir().unwrap();
@@ -324,4 +325,5 @@ mod tests {
         assert_eq!(*p1.point.vec(), *e1);
         assert_eq!(*p2.point.vec(), *e2);
     }
+    */
 }

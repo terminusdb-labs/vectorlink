@@ -3,7 +3,7 @@ extern crate test;
 use rand::{rngs::StdRng, SeedableRng};
 use test::Bencher;
 
-use terminusdb_semantic_indexer::vecmath::*;
+use vectorlink::vecmath::*;
 
 #[bench]
 fn bench_cpu_distance(b: &mut Bencher) {
@@ -15,12 +15,11 @@ fn bench_cpu_distance(b: &mut Bencher) {
     b.iter(move || normalized_cosine_distance_scalar(&e1, &e2));
 }
 
-#[cfg(feature = "simd")]
 mod simd_benches {
     use rand::{rngs::StdRng, SeedableRng};
-    use terminusdb_semantic_indexer::vecmath::simd::*;
-    use terminusdb_semantic_indexer::vecmath::*;
     use test::Bencher;
+    use vectorlink::vecmath::simd::*;
+    use vectorlink::vecmath::*;
 
     #[bench]
     fn bench_simd_aligned_distance(b: &mut Bencher) {

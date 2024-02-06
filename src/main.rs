@@ -1,3 +1,5 @@
+#![feature(portable_simd)]
+
 use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::io::Write;
