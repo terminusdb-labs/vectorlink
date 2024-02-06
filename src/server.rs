@@ -57,6 +57,7 @@ use crate::indexer::Point;
 use crate::indexer::PointOperation;
 use crate::indexer::SearchError;
 use crate::indexer::{start_indexing_from_operations, HnswIndex, IndexIdentifier, OpenAI};
+use crate::openai::Model;
 use crate::openai::{embeddings_for, EmbeddingError};
 use crate::vectors::VectorStore;
 
@@ -539,6 +540,7 @@ impl Service {
         previous: Option<String>,
         task_id: &str,
         api_key: String,
+        model: Model,
         index_id: &str,
         content_endpoint: String,
     ) -> Result<(String, Arc<HnswIndex>), ResponseError> {
@@ -553,7 +555,7 @@ impl Service {
         .await?
         .chunks(100);
         self.process_operation_chunks(
-            opstream, domain, commit, previous, index_id, task_id, &api_key,
+            opstream, domain, commit, previous, index_id, task_id, &api_key, model,
         )
         .await
     }
@@ -565,6 +567,7 @@ impl Service {
         previous: Option<String>,
         task_id: String,
         api_key: String,
+        model: Model,
     ) -> Result<(), StartIndexError> {
         let content_endpoint = self.content_endpoint.clone();
         let internal_task_id = task_id.clone();
@@ -589,6 +592,7 @@ impl Service {
                             previous,
                             &task_id,
                             api_key,
+                            model,
                             &index_id,
                             content_endpoint,
                         )
@@ -669,6 +673,7 @@ impl Service {
         index_id: &str,
         task_id: &str,
         api_key: &str,
+        model: Model,
     ) -> Result<(String, Arc<HnswIndex>), ResponseError> {
         let id = create_index_name(&domain, &commit);
         let mut hnsw = self
@@ -705,6 +710,7 @@ impl Service {
                         &inner_inner_vector_store,
                         structs,
                         &inner_inner_api_key,
+                        model,
                     )
                     .await
                 })
@@ -757,7 +763,14 @@ impl Service {
                 num_retries: 0,
             },
         );
-        self.start_indexing(domain, commit, previous, task_id.clone(), api_key)?;
+        self.start_indexing(
+            domain,
+            commit,
+            previous,
+            task_id.clone(),
+            api_key,
+            Model::Ada2,
+        )?;
         Ok(task_id)
     }
 
@@ -959,8 +972,9 @@ impl Service {
                 let body_bytes = hyper::body::to_bytes(body).await.unwrap();
                 let q = String::from_utf8(body_bytes.to_vec()).unwrap();
                 let api_key = get_header_value(&headers, "VECTORLINK_EMBEDDING_API_KEY");
-                let result: Result<Response<Body>, ResponseError> =
-                    self.index_response(api_key, q, domain, commit, count).await;
+                let result: Result<Response<Body>, ResponseError> = self
+                    .index_response(api_key, q, domain, commit, count, Model::Ada2)
+                    .await;
                 match result {
                     Ok(body) => Ok(body),
                     Err(e) => Ok(Response::builder()
@@ -984,9 +998,10 @@ impl Service {
         domain: String,
         commit: String,
         count: usize,
+        model: Model,
     ) -> Result<Response<Body>, ResponseError> {
         let api_key = api_key?;
-        let vec: Vec<[f32; 1536]> = embeddings_for(&api_key, &[q]).await?.0;
+        let vec: Vec<[f32; 1536]> = embeddings_for(&api_key, &[q], model).await?.0;
         let qp = Point::Mem {
             vec: Box::new(vec[0]),
         };

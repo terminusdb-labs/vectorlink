@@ -6,6 +6,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use clap::ValueEnum;
 use lazy_static::lazy_static;
 use reqwest::{header::HeaderValue, Body, Client, Method, Request, StatusCode, Url};
 use serde::{
@@ -184,10 +185,26 @@ async fn execute_request_and_get_bytes(
     Ok((status, bytes))
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum Model {
+    Ada2,
+    Small3,
+}
+
+impl Model {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Ada2 => "text-embedding-ada-002",
+            Self::Small3 => "text-embedding-3-small",
+        }
+    }
+}
+
 const MAX_FAILURE_COUNT: usize = 5;
 pub async fn embeddings_for(
     api_key: &str,
     strings: &[String],
+    model: Model,
 ) -> Result<(Vec<Embedding>, usize), EmbeddingError> {
     const RATE_LIMIT: usize = 1_000_000;
     lazy_static! {
@@ -215,7 +232,7 @@ pub async fn embeddings_for(
         .await;
 
     let body = EmbeddingRequest {
-        model: "text-embedding-ada-002",
+        model: model.name(),
         input: &token_lists,
         user: None,
     };

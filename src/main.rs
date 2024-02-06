@@ -22,6 +22,7 @@ use indexer::Point;
 use indexer::{index_serialization_path, serialize_index};
 use indexer::{operations_to_point_operations, OpenAI};
 use itertools::Itertools;
+use openai::Model;
 use parallel_hnsw::{AbstractVector, AllVectorIterator, Hnsw, NodeDistance, NodeId, VectorId};
 use rand::thread_rng;
 use rand::*;
@@ -89,12 +90,16 @@ enum Commands {
         input: String,
         #[arg(short, long, default_value_t = 10000)]
         size: usize,
+        #[arg(short, long, value_enum, default_value_t = Model::Ada2)]
+        model: Model,
     },
     Embed {
         #[arg(short, long)]
         key: Option<String>,
         #[arg(short, long)]
         string: String,
+        #[arg(short, long, value_enum, default_value_t = Model::Ada2)]
+        model: Model,
     },
     Compare {
         #[arg(short, long)]
@@ -103,6 +108,8 @@ enum Commands {
         s1: String,
         #[arg(long)]
         s2: String,
+        #[arg(short, long, value_enum, default_value_t = Model::Ada2)]
+        model: Model,
     },
     Compare2 {
         #[arg(short, long)]
@@ -113,6 +120,8 @@ enum Commands {
         s2: String,
         #[arg(short, long, value_enum, default_value_t=DistanceVariant::Default)]
         variant: DistanceVariant,
+        #[arg(short, long, value_enum, default_value_t = Model::Ada2)]
+        model: Model,
     },
     TestRecall {
         #[arg(short, long)]
@@ -153,6 +162,8 @@ enum Commands {
     Test {
         #[arg(short, long)]
         key: Option<String>,
+        #[arg(short, long, value_enum, default_value_t = Model::Ada2)]
+        model: Model,
     },
     ImproveIndex {
         #[arg(short, long)]
@@ -217,12 +228,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             )
             .await?
         }
-        Commands::Embed { key, string } => {
-            let v: Vec<[f32; 1536]> = openai::embeddings_for(&key_or_env(key), &[string]).await?.0;
+        Commands::Embed { key, string, model } => {
+            let v: Vec<[f32; 1536]> = openai::embeddings_for(&key_or_env(key), &[string], model)
+                .await?
+                .0;
             eprintln!("{:?}", v);
         }
-        Commands::Compare { key, s1, s2 } => {
-            let v = openai::embeddings_for(&key_or_env(key), &[s1, s2]).await?.0;
+        Commands::Compare { key, s1, s2, model } => {
+            let v = openai::embeddings_for(&key_or_env(key), &[s1, s2], model)
+                .await?
+                .0;
             let p1 = Point::Mem {
                 vec: Box::new(v[0]),
             };
@@ -240,8 +255,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             s1,
             s2,
             variant,
+            model,
         } => {
-            let v = openai::embeddings_for(&key_or_env(key), &[s1, s2]).await?.0;
+            let v = openai::embeddings_for(&key_or_env(key), &[s1, s2], model)
+                .await?
+                .0;
             let p1 = &v[0];
             let p2 = &v[1];
             let distance = match variant {
@@ -251,7 +269,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             };
             println!("distance: {}", distance);
         }
-        Commands::Test { key } => {
+        Commands::Test { key, model } => {
             let v = openai::embeddings_for(
                 &key_or_env(key),
                 &[
@@ -260,6 +278,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     "woman".to_string(),
                     "queen".to_string(),
                 ],
+                model,
             )
             .await?
             .0;
@@ -318,10 +337,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             input,
             size,
             commit,
+            model,
         } => {
             eprintln!("starting load");
             let key = key_or_env(key);
-            index_from_operations_file(&key, input, directory, &domain, &commit, size)
+            index_from_operations_file(&key, model, input, directory, &domain, &commit, size)
                 .await
                 .unwrap()
         }

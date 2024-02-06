@@ -1,7 +1,7 @@
 #![allow(unused, dead_code)]
 use crate::{
     comparator::OpenAIComparator,
-    openai::{embeddings_for, EmbeddingError},
+    openai::{embeddings_for, EmbeddingError, Model},
     server::Operation,
     vecmath::{self, Embedding},
     vectors::{Domain, LoadedVec, VectorStore},
@@ -101,6 +101,7 @@ pub async fn operations_to_point_operations(
     vector_store: &VectorStore,
     structs: Vec<Result<Operation, std::io::Error>>,
     key: &str,
+    model: Model,
 ) -> Result<(Vec<PointOperation>, usize), IndexError> {
     eprintln!("start operations_to_point_operations");
     // Should not unwrap here -
@@ -122,7 +123,7 @@ pub async fn operations_to_point_operations(
         (Vec::new(), 0)
     } else {
         eprintln!("start embedding");
-        let result = embeddings_for(key, &strings).await?;
+        let result = embeddings_for(key, &strings, model).await?;
         eprintln!("end embedding");
         result
     };

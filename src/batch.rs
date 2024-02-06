@@ -22,7 +22,7 @@ use crate::{
         create_index_name, deserialize_index, index_serialization_path, serialize_index, HnswIndex,
         OpenAI, Point,
     },
-    openai::{embeddings_for, EmbeddingError},
+    openai::{embeddings_for, EmbeddingError, Model},
     server::Operation,
     vecmath::Embedding,
     vectors::VectorStore,
@@ -80,6 +80,7 @@ pub async fn vectorize_from_operations<
     P: AsRef<Path> + Unpin,
 >(
     api_key: &str,
+    model: Model,
     vec_file: &mut File,
     op_stream: S,
     progress_file_path: P,
@@ -106,7 +107,7 @@ pub async fn vectorize_from_operations<
     let mut taskstream = filtered_op_stream
         .map(|chunk| {
             let inner_api_key = api_key.to_string();
-            tokio::spawn(async move { chunk_to_embeds(inner_api_key, chunk).await })
+            tokio::spawn(async move { chunk_to_embeds(inner_api_key, chunk, model).await })
         })
         .buffered(10);
 
@@ -134,6 +135,7 @@ pub async fn vectorize_from_operations<
 async fn chunk_to_embeds(
     api_key: String,
     chunk: Vec<Result<Operation, io::Error>>,
+    model: Model,
 ) -> Result<(Vec<Embedding>, usize), VectorizationError> {
     let chunk: Result<Vec<String>, _> = chunk
         .into_iter()
@@ -141,7 +143,7 @@ async fn chunk_to_embeds(
         .collect();
     let chunk = chunk?;
 
-    Ok(embeddings_for(&api_key, &chunk).await?)
+    Ok(embeddings_for(&api_key, &chunk, model).await?)
 }
 
 async fn get_operations_from_file(
@@ -282,6 +284,7 @@ pub async fn index_using_operations_and_vectors<
 
 pub async fn index_from_operations_file<P: AsRef<Path>>(
     api_key: &str,
+    model: Model,
     op_file_path: P,
     vectorlink_path: P,
     domain: &str,
@@ -306,7 +309,7 @@ pub async fn index_from_operations_file<P: AsRef<Path>>(
     let mut op_file = File::open(&op_file_path).await?;
     let op_stream = get_operations_from_file(&mut op_file).await?;
 
-    vectorize_from_operations(api_key, &mut vec_file, op_stream, progress_file_path).await?;
+    vectorize_from_operations(api_key, model, &mut vec_file, op_stream, progress_file_path).await?;
 
     index_using_operations_and_vectors(
         domain,
