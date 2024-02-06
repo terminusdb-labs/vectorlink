@@ -123,6 +123,16 @@ enum Commands {
         #[arg(short, long, value_enum, default_value_t = Model::Ada2)]
         model: Model,
     },
+    CompareModels {
+        #[arg(short, long)]
+        key: Option<String>,
+        #[arg(long)]
+        word: String,
+        #[arg(long)]
+        near1: String,
+        #[arg(long)]
+        near2: String,
+    },
     TestRecall {
         #[arg(short, long)]
         commit: String,
@@ -268,6 +278,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 DistanceVariant::Simd => vecmath::normalized_cosine_distance_simd(p1, p2),
             };
             println!("distance: {}", distance);
+        }
+        Commands::CompareModels {
+            key,
+            word,
+            near1,
+            near2,
+        } => {
+            let strings = [word, near1, near2];
+            for model in [Model::Ada2, Model::Small3] {
+                let v = openai::embeddings_for(&key_or_env(key.clone()), &strings, model)
+                    .await?
+                    .0;
+                let embedding_word = &v[0];
+                let embedding_n1 = &v[1];
+                let embedding_n2 = &v[2];
+                let distance1 = vecmath::normalized_cosine_distance(embedding_word, embedding_n1);
+                let distance2 = vecmath::normalized_cosine_distance(embedding_word, embedding_n2);
+                println!("{model:?}: {distance1} {distance2}");
+            }
         }
         Commands::Test { key, model } => {
             let v = openai::embeddings_for(
