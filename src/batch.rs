@@ -7,7 +7,6 @@ use std::{
 };
 
 use futures::{future, Stream, StreamExt, TryStreamExt};
-use hnsw::Searcher;
 use parallel_hnsw::{Hnsw, VectorId};
 use thiserror::Error;
 use tokio::{
