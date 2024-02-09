@@ -542,10 +542,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .unwrap()
                 .unwrap();
 
+            let initial_search_depth = 3 * hnsw.zero_neighborhood_size();
             let elts = if let Some(take) = take {
-                Either::Left(hnsw.threshold_nn(threshold, 2).take_any(take))
+                Either::Left(
+                    hnsw.threshold_nn(threshold, 2, initial_search_depth)
+                        .take_any(take),
+                )
             } else {
-                Either::Right(hnsw.threshold_nn(threshold, 2))
+                Either::Right(hnsw.threshold_nn(threshold, 2, initial_search_depth))
             };
             let stdout = std::io::stdout();
             elts.for_each(|(v, results)| {
