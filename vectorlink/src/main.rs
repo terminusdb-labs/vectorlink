@@ -92,6 +92,8 @@ enum Commands {
         size: usize,
         #[arg(short, long, value_enum, default_value_t = Model::Ada2)]
         model: Model,
+        #[arg(long)]
+        build_index: Option<bool>,
     },
     Embed {
         #[arg(short, long)]
@@ -367,12 +369,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             size,
             commit,
             model,
+            build_index,
         } => {
             eprintln!("starting load");
             let key = key_or_env(key);
-            index_from_operations_file(&key, model, input, directory, &domain, &commit, size)
-                .await
-                .unwrap()
+            index_from_operations_file(
+                &key,
+                model,
+                input,
+                directory,
+                &domain,
+                &commit,
+                size,
+                build_index.unwrap_or(true),
+            )
+            .await
+            .unwrap()
         }
         Commands::TestRecall {
             domain,

@@ -178,35 +178,15 @@ pub async fn index_using_operations_and_vectors<
     P0: AsRef<Path>,
     P1: AsRef<Path>,
     P2: AsRef<Path>,
-    P3: AsRef<Path>,
 >(
     domain: &str,
     commit: &str,
     vectorlink_path: P0,
     staging_path: P1,
     op_file_path: P2,
-    vec_path: P3,
     size: usize,
+    id_offset: u64,
 ) -> Result<(), IndexingError> {
-    // first append vectors in bulk
-    let mut extended_path: PathBuf = staging_path.as_ref().into();
-    extended_path.push("vectors_extended");
-    let mut extended_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(extended_path)
-        .await?;
-    let id_offset: u64;
-    if extended_file.metadata().await?.size() != 8 {
-        eprintln!("Concatenating to vector store");
-        id_offset = extend_vector_store(domain, &vectorlink_path, vec_path, size).await? as u64;
-        extended_file.write_u64(id_offset).await?;
-    } else {
-        eprintln!("Already concantenated");
-        id_offset = extended_file.read_u64().await?;
-    }
-
     // Start at last hnsw offset
     let mut progress_file_path: PathBuf = staging_path.as_ref().into();
     progress_file_path.push("index_progress");
@@ -290,6 +270,7 @@ pub async fn index_from_operations_file<P: AsRef<Path>>(
     domain: &str,
     commit: &str,
     size: usize,
+    build_index: bool,
 ) -> Result<(), BatchError> {
     let mut staging_path: PathBuf = vectorlink_path.as_ref().into();
     staging_path.push(".staging");
@@ -311,15 +292,38 @@ pub async fn index_from_operations_file<P: AsRef<Path>>(
 
     vectorize_from_operations(api_key, model, &mut vec_file, op_stream, progress_file_path).await?;
 
-    index_using_operations_and_vectors(
-        domain,
-        commit,
-        vectorlink_path,
-        staging_path,
-        op_file_path,
-        vector_path,
-        size,
-    )
-    .await?;
+    // first append vectors in bulk
+    let mut extended_path: PathBuf = staging_path.clone();
+    extended_path.push("vectors_extended");
+    let mut extended_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(extended_path)
+        .await?;
+    let id_offset: u64;
+    if extended_file.metadata().await?.size() != 8 {
+        eprintln!("Concatenating to vector store");
+        id_offset = extend_vector_store(domain, &vectorlink_path, vector_path, size).await? as u64;
+        extended_file.write_u64(id_offset).await?;
+    } else {
+        eprintln!("Already concantenated");
+        id_offset = extended_file.read_u64().await?;
+    }
+
+    if build_index {
+        index_using_operations_and_vectors(
+            domain,
+            commit,
+            vectorlink_path,
+            staging_path,
+            op_file_path,
+            size,
+            id_offset,
+        )
+        .await?;
+    } else {
+        eprintln!("No index built");
+    }
     Ok(())
 }
