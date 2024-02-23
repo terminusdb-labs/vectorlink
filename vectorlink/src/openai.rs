@@ -110,8 +110,6 @@ fn truncated_tokens_for(s: &str) -> Vec<usize> {
     let mut tokens = tokens_for(s);
     if tokens.len() > MAX_TOKEN_COUNT {
         tokens.truncate(MAX_TOKEN_COUNT);
-        let decoded = ENCODER.decode(tokens.clone()).unwrap();
-        eprintln!("truncating to {decoded}");
     }
 
     tokens
