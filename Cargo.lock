@@ -381,6 +381,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fancy-regex"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7493d4c459da9f84325ad297371a6b2b8a162800873a22e3b6b6512e61d18c05"
+dependencies = [
+ "bit-set",
+ "regex",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1620,7 +1630,22 @@ dependencies = [
  "anyhow",
  "base64",
  "bstr",
- "fancy-regex",
+ "fancy-regex 0.11.0",
+ "lazy_static",
+ "parking_lot",
+ "rustc-hash",
+]
+
+[[package]]
+name = "tiktoken-rs"
+version = "0.5.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40894b788eb28bbb7e36bdc8b7b1b1488b9c93fa3730f315ab965330c94c0842"
+dependencies = [
+ "anyhow",
+ "base64",
+ "bstr",
+ "fancy-regex 0.12.0",
  "lazy_static",
  "parking_lot",
  "rustc-hash",
@@ -1833,12 +1858,37 @@ dependencies = [
  "space 0.17.0",
  "tempfile",
  "thiserror",
- "tiktoken-rs",
+ "tiktoken-rs 0.4.5",
  "tokio",
  "tokio-stream",
  "tokio-util",
  "url",
  "urlencoding",
+]
+
+[[package]]
+name = "vectorlink-embed"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "lazy_static",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tiktoken-rs 0.5.8",
+ "tokio",
+]
+
+[[package]]
+name = "vectorlink-store"
+version = "0.1.0"
+
+[[package]]
+name = "vectorlink-task"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
