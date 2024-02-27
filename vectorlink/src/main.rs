@@ -660,7 +660,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             .map(|r| (r.0 .0, r.1))
                             .collect();
                         let result_tuple = (sequence_index, search_result);
-                        serde_json::to_writer(output.lock(), &result_tuple).unwrap();
+                        {
+                            let mut lock = output.lock();
+                            serde_json::to_writer(&mut lock, &result_tuple).unwrap();
+                            write!(&mut lock, "\n").unwrap();
+                        }
 
                         // do index lookup stuff
                         sequence_index += 1;
