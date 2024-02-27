@@ -2,8 +2,10 @@
 
 use std::collections::HashSet;
 use std::io::ErrorKind;
+use std::io::Read;
 use std::io::Write;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 mod batch;
 mod comparator;
@@ -26,10 +28,13 @@ use openai::Model;
 use parallel_hnsw::{AbstractVector, AllVectorIterator, Hnsw, NodeDistance, NodeId, VectorId};
 use rand::thread_rng;
 use rand::*;
+use serde_json::json;
 use server::Operation;
 use space::Metric;
 use std::fs::File;
 use std::io::{self, BufRead};
+use vecmath::EMBEDDING_BYTE_LENGTH;
+use vecmath::EMBEDDING_LENGTH;
 
 use rayon::iter::Either;
 use rayon::prelude::*;
@@ -190,6 +195,20 @@ enum Commands {
         improve_neighbors: Option<f32>,
         #[arg(short, long)]
         promote: bool,
+    },
+    ScanNeighbors {
+        #[arg(short, long)]
+        commit: String,
+        #[arg(long)]
+        domain: String,
+        #[arg(long)]
+        sequence_domain: String,
+        #[arg(short, long)]
+        directory: String,
+        #[arg(short, long, default_value_t = 10000)]
+        size: usize,
+        #[arg(short, long, default_value_t = 1.0_f32)]
+        threshold: f32,
     },
 }
 
@@ -602,6 +621,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 hnsw.serialize(hnsw_index_path);
             } else {
                 todo!();
+            }
+        }
+        Commands::ScanNeighbors {
+            commit,
+            domain,
+            sequence_domain,
+            directory,
+            size,
+            threshold,
+        } => {
+            let dirpath = Path::new(&directory);
+            let hnsw_index_path = dbg!(format!(
+                "{}/{}.hnsw",
+                directory,
+                create_index_name(&domain, &commit)
+            ));
+            let store = VectorStore::new(dirpath, size);
+            let hnsw: HnswIndex = deserialize_index(&hnsw_index_path, Arc::new(store))
+                .unwrap()
+                .unwrap();
+
+            let mut sequence_path = PathBuf::from(directory);
+            sequence_path.push(format!("{sequence_domain}.vec"));
+            let mut embedding = [0; EMBEDDING_BYTE_LENGTH];
+            let mut sequence_file = File::open(sequence_path).unwrap();
+            let mut sequence_index = 0; // todo file offsetting etc
+            let output = std::io::stdout();
+            loop {
+                match sequence_file.read_exact(&mut embedding) {
+                    Ok(()) => {
+                        let converted_embedding: &[f32; EMBEDDING_LENGTH] =
+                            unsafe { std::mem::transmute(&embedding) };
+                        let search_result: Vec<_> = hnsw
+                            .search(AbstractVector::Unstored(converted_embedding), 300, 1)
+                            .into_iter()
+                            .filter(|r| r.1 < threshold)
+                            .map(|r| (r.0 .0, r.1))
+                            .collect();
+                        let result_tuple = (sequence_index, search_result);
+                        serde_json::to_writer(output.lock(), &result_tuple).unwrap();
+
+                        // do index lookup stuff
+                        sequence_index += 1;
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                        break;
+                    }
+                    Err(e) => {
+                        panic!("error occured while processing sequence vector file: {}", e);
+                    }
+                }
             }
         }
     }
