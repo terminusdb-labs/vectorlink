@@ -643,7 +643,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .unwrap();
 
             let mut sequence_path = PathBuf::from(directory);
-            sequence_path.push(format!("{sequence_domain}.vec"));
+            sequence_path.push(format!("{sequence_domain}.vecs"));
             let mut embedding = [0; EMBEDDING_BYTE_LENGTH];
             let mut sequence_file = File::open(sequence_path).unwrap();
             let mut sequence_index = 0; // todo file offsetting etc
