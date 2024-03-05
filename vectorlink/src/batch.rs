@@ -186,6 +186,7 @@ pub async fn index_using_operations_and_vectors<
     op_file_path: P2,
     size: usize,
     id_offset: u64,
+    quantize_hnsw: bool,
 ) -> Result<(), IndexingError> {
     // Start at last hnsw offset
     let mut progress_file_path: PathBuf = staging_path.as_ref().into();
@@ -252,15 +253,24 @@ pub async fn index_using_operations_and_vectors<
         .collect();
 
     eprintln!("ready to generate hnsw");
-    let hnsw = Hnsw::generate(comparator, vecs, 24, 48, 12);
-    eprintln!("done generating hnsw");
-    hnsw.serialize(&staging_file).unwrap();
+    if quantize_hnsw {
+        let number_of_vectors = NUMBER_OF_CENTROIDS / QUANTIZED_EMBEDDING_LENGTH;
+        let cc = Centroid32Comparator::default();
+        let qc = QuantizedComparator{ cc, data: Default::default() };
+        let c = comparator;
+        let hnsw = QuantizedHnsw::new(number_of_vectors, cc, qc, c);
+        hnsw.serialize(&staging_file).unwrap();
+    }else{
+        let hnsw = Hnsw::generate(comparator, vecs, 24, 48, 12);
+        eprintln!("done generating hnsw");
+        hnsw.serialize(&staging_file).unwrap();
+    }
     eprintln!("done serializing hnsw");
     eprintln!("renaming {staging_file:?} to {final_file:?}");
     tokio::fs::rename(&staging_file, &final_file).await?;
     eprintln!("renamed hnsw");
     Ok(())
-}
+};
 
 pub async fn index_from_operations_file<P: AsRef<Path>>(
     api_key: &str,
@@ -271,6 +281,7 @@ pub async fn index_from_operations_file<P: AsRef<Path>>(
     commit: &str,
     size: usize,
     build_index: bool,
+    quantize_hnsw: bool,
 ) -> Result<(), BatchError> {
     let mut staging_path: PathBuf = vectorlink_path.as_ref().into();
     staging_path.push(".staging");
@@ -320,6 +331,7 @@ pub async fn index_from_operations_file<P: AsRef<Path>>(
             op_file_path,
             size,
             id_offset,
+            quantize_hnsw,
         )
         .await?;
     } else {

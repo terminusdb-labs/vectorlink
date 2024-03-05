@@ -1,7 +1,7 @@
 #![allow(unused)]
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Seek, SeekFrom, Write};
@@ -14,6 +14,7 @@ use std::sync::atomic::{self, AtomicUsize};
 use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 
 use lru::LruCache;
+use rand::thread_rng;
 use rayon::iter::plumbing::{bridge_producer_consumer, Producer};
 use rayon::iter::{IndexedParallelIterator, ParallelIterator};
 use serde::Serialize;
@@ -628,6 +629,28 @@ impl VectorStore {
             }
         }
         Ok((offset..offset + num_added).collect())
+    }
+
+    pub fn get_random_vectors(&self, domain: &Domain, count: usize) -> io::Result<Vec<Embedding>> {
+        let mut rng = thread_rng();
+        let total = self.num_vecs();
+        let candidates: HashSet<usize> = HashSet::new();
+        assert!(total > count);
+        loop {
+            if candidates.len() == count {
+                break;
+            } else {
+                let res = rng.gen_range(0..=total);
+                candidates.insert(res)
+            }
+        }
+        let vecs = Vec::with_capacity(count);
+
+        for k in candidates {
+            let v = *self.get_vec(domain, k)?;
+            vecs.push(v)
+        }
+        Ok(vecs)
     }
 
     pub fn get_vec(&self, domain: &Domain, index: usize) -> io::Result<Option<LoadedVec>> {

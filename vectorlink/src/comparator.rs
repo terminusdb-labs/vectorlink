@@ -1,12 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
+use std::ops::Deref;
 use std::os::unix::fs::MetadataExt;
+use std::path::PathBuf;
+use std::sync::{RwLock, RwLockReadGuard};
 use std::{path::Path, sync::Arc};
 
-use parallel_hnsw::{AbstractVector, Comparator, Serializable, SerializationError, VectorId};
+use parallel_hnsw::{pq, AbstractVector, Comparator, Serializable, SerializationError, VectorId};
 
-use crate::vecmath::{self, Centroid32, CENTROID_32_BYTE_LENGTH};
+use crate::vecmath::{self, Centroid32, QuantizedEmbedding, CENTROID_32_BYTE_LENGTH};
 use crate::vectors::LoadedVec;
 use crate::{
     vecmath::{normalized_cosine_distance, Embedding},
@@ -74,7 +77,7 @@ impl Serializable for OpenAIComparator {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Centroid32Comparator {
     centroids: Arc<Vec<Centroid32>>,
 }
@@ -125,4 +128,117 @@ impl Serializable for Centroid32Comparator {
     }
 }
 
-pub struct QuantizedComparator {}
+#[derive(Clone)]
+pub struct QuantizedComparator {
+    cc: Centroid32Comparator,
+    data: Arc<RwLock<Vec<QuantizedEmbedding>>>,
+}
+
+struct ReadLockedVec<'a, T> {
+    lock: RwLockReadGuard<'a, Vec<T>>,
+    id: VectorId,
+}
+
+impl<'a, T> Deref for ReadLockedVec<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.lock[self.id.0]
+    }
+}
+
+impl Comparator for QuantizedComparator {
+    type T = QuantizedEmbedding;
+
+    type Borrowable<'a> = ReadLockedVec<'a, Self::T>;
+
+    fn lookup(&self, v: VectorId) -> Self::Borrowable<'_> {
+        ReadLockedVec {
+            lock: self.data.read().unwrap(),
+            id: v,
+        }
+    }
+
+    fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
+        let v_reconstruct1: Vec<f32> = v1
+            .iter()
+            .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter().copied())
+            .collect();
+        let v_reconstruct2: Vec<f32> = v2
+            .iter()
+            .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter().copied())
+            .collect();
+        let mut ar1 = [0.0_f32; 1536];
+        let mut ar2 = [0.0_f32; 1536];
+        ar1.copy_from_slice(&v_reconstruct1);
+        ar2.copy_from_slice(&v_reconstruct2);
+        normalized_cosine_distance(&ar1, &ar2)
+    }
+}
+
+impl Serializable for QuantizedComparator {
+    type Params = ();
+
+    fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
+        let path_buf: PathBuf = path.as_ref().into();
+        let index_path = path_buf.join("index");
+        self.cc.serialize(index_path)?;
+
+        let vector_path = path_buf.join("vectors");
+        let vec_lock = self.data.read().unwrap();
+        let size = vec_lock.len() * std::mem::size_of::<QuantizedEmbedding>();
+        let buf: &[u8] =
+            unsafe { std::slice::from_raw_parts(vec_lock.as_ptr() as *const u8, size) };
+        std::fs::write(vector_path, buf)?;
+        Ok(())
+    }
+
+    fn deserialize<P: AsRef<Path>>(
+        path: P,
+        params: Self::Params,
+    ) -> Result<Self, SerializationError> {
+        let path_buf: PathBuf = path.as_ref().into();
+        let index_path = path_buf.join("index");
+        let cc = Centroid32Comparator::deserialize(index_path, ())?;
+
+        let vector_path = path_buf.join("vectors");
+
+        let size = std::fs::metadata(&path)?.size() as usize;
+        assert_eq!(0, size % std::mem::size_of::<QuantizedEmbedding>());
+        let number_of_quantized = size / std::mem::size_of::<QuantizedEmbedding>();
+        let mut vec = vec![Default::default(); number_of_quantized];
+        let mut file = std::fs::File::open(&vector_path)?;
+        let buf = unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr() as *mut u8, size) };
+        file.read_exact(buf)?;
+        let data = Arc::new(RwLock::new(vec));
+        Ok(Self { cc, data })
+    }
+}
+
+impl pq::VectorStore for QuantizedComparator {
+    type T = <QuantizedComparator as Comparator>::T;
+
+    fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
+        let mut data = self.data.write().unwrap();
+        let vid = data.len();
+        let mut vectors: Vec<VectorId> = Vec::new();
+        data.extend(i.enumerate().map(|(i, v)| {
+            vectors.push(VectorId(vid + i));
+            v
+        }));
+        vectors
+    }
+}
+
+impl pq::VectorSelector for OpenAIComparator {
+    type T = Embedding;
+
+    fn selection(&self, size: usize) -> Vec<Self::T> {
+        self.store.get_random_vectors(&self.domain, size).unwrap()
+    }
+
+    fn vector_chunks(&self) -> impl Iterator<Item = Vec<Self::T>> {
+        todo!();
+        std::iter::empty()
+    }
+}

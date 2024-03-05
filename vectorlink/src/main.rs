@@ -99,6 +99,8 @@ enum Commands {
         model: Model,
         #[arg(long)]
         build_index: Option<bool>,
+        #[arg(short, long)]
+        quantize_hnsw: bool,
     },
     Embed {
         #[arg(short, long)]
@@ -389,6 +391,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             commit,
             model,
             build_index,
+            quantize_hnsw,
         } => {
             eprintln!("starting load");
             let key = key_or_env(key);
@@ -401,6 +404,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 &commit,
                 size,
                 build_index.unwrap_or(true),
+                quantize_hnsw,
             )
             .await
             .unwrap()
