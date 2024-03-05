@@ -16,9 +16,9 @@ fn bench_cpu_distance(b: &mut Bencher) {
 }
 
 mod simd_benches {
+    use crate::simd::aligned_box;
     use rand::{rngs::StdRng, SeedableRng};
     use test::Bencher;
-    use vectorlink::vecmath::simd::*;
     use vectorlink::vecmath::*;
 
     #[bench]
@@ -28,7 +28,7 @@ mod simd_benches {
         let e1 = aligned_box(random_normalized_embedding(&mut rng));
         let e2 = aligned_box(random_normalized_embedding(&mut rng));
 
-        b.iter(move || unsafe { normalized_cosine_distance_simd_aligned_unchecked(&e1, &e2) });
+        b.iter(move || unsafe { normalized_cosine_distance_simd(&e1, &e2) });
     }
 
     #[bench]
@@ -38,6 +38,6 @@ mod simd_benches {
         let e1 = random_normalized_embedding(&mut rng);
         let e2 = random_normalized_embedding(&mut rng);
 
-        b.iter(move || normalized_cosine_distance_simd_unaligned(&e1, &e2));
+        b.iter(move || normalized_cosine_distance_simd(&e1, &e2));
     }
 }

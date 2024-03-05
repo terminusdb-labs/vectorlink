@@ -6,6 +6,16 @@ pub const EMBEDDING_BYTE_LENGTH: usize = EMBEDDING_LENGTH * 4;
 pub type Embedding = [f32; EMBEDDING_LENGTH];
 pub type EmbeddingBytes = [u8; EMBEDDING_BYTE_LENGTH];
 
+pub const QUANTIZED_EMBEDDING_LENGTH: usize = 48;
+pub const QUANTIZED_EMBEDDING_BYTE_LENGTH: usize = QUANTIZED_EMBEDDING_LENGTH * 2;
+pub type QuantizedEmbedding = [u16; QUANTIZED_EMBEDDING_LENGTH];
+pub type QuantizedEmbeddingBytes = [u8; QUANTIZED_EMBEDDING_BYTE_LENGTH];
+
+pub const CENTROID_32_LENGTH: usize = 32;
+pub const CENTROID_32_BYTE_LENGTH: usize = CENTROID_32_LENGTH * 4;
+pub type Centroid32 = [f32; CENTROID_32_LENGTH];
+pub type CentroidBytes = [u8; CENTROID_32_BYTE_LENGTH];
+
 pub fn empty_embedding() -> Embedding {
     [0.0; EMBEDDING_LENGTH]
 }
@@ -71,6 +81,21 @@ pub fn normalized_cosine_distance(left: &Embedding, right: &Embedding) -> f32 {
     simd::normalized_cosine_distance_simd(left, right)
 }
 
+pub fn normalized_cosine_distance_32(v1: &Centroid32, v2: &Centroid32) -> f32 {
+    normalized_cosine_distance_32_simd(v1, v2)
+}
+
+pub fn normalized_cosine_distance_32_scalar(v1: &Centroid32, v2: &Centroid32) -> f32 {
+    normalize_cosine_distance(
+        v1.iter()
+            .zip(v2.iter())
+            .map(|(f1, f2)| f1 * f2)
+            .sum::<f32>(),
+    )
+}
+
+pub use simd::normalized_cosine_distance_32_simd;
+
 pub fn normalize_vec(vec: &mut Embedding) {
     simd::normalize_vec_simd(vec)
 }
@@ -85,68 +110,27 @@ pub mod simd {
     }
 
     pub fn normalized_cosine_distance_simd(left: &Embedding, right: &Embedding) -> f32 {
-        if left.as_ptr().align_offset(std::mem::align_of::<f32x16>()) == 0
-            && right.as_ptr().align_offset(std::mem::align_of::<f32x16>()) == 0
-        {
-            unsafe { normalized_cosine_distance_simd_aligned_unchecked(left, right) }
-        } else {
-            normalized_cosine_distance_simd_unaligned(left, right)
+        let mut sum = <f32x16>::splat(0.);
+        for x in 0..left.len() / 16 {
+            let l = <f32x16>::from_slice(&left[x * 16..(x + 1) * 16]);
+            let r = <f32x16>::from_slice(&right[x * 16..(x + 1) * 16]);
+            sum += l * r;
         }
+        normalize_cosine_distance(sum.reduce_sum())
+    }
+
+    pub fn normalized_cosine_distance_32_simd(left: &Centroid32, right: &Centroid32) -> f32 {
+        let mut sum = <f32x16>::splat(0.);
+        let l = <f32x16>::from_slice(&left[0..16]);
+        let r = <f32x16>::from_slice(&right[0..16]);
+        sum += l * r;
+        let l = <f32x16>::from_slice(&left[16..32]);
+        let r = <f32x16>::from_slice(&right[16..32]);
+        sum += l * r;
+        normalize_cosine_distance(sum.reduce_sum())
     }
 
     pub fn normalize_vec_simd(vec: &mut Embedding) {
-        if vec.as_ptr().align_offset(std::mem::align_of::<f32x16>()) == 0 {
-            unsafe { normalize_vec_simd_aligned_unchecked(vec) }
-        } else {
-            normalize_vec_simd_unaligned(vec)
-        }
-    }
-
-    pub unsafe fn normalized_cosine_distance_simd_aligned_unchecked(
-        left: &Embedding,
-        right: &Embedding,
-    ) -> f32 {
-        //eprintln!("using {} ({} lanes)", stringify!(f32x16), 16);
-        let mut sum = <f32x16>::splat(0.);
-        for x in 0..left.len() / 16 {
-            let l = <f32x16>::from_slice(&left[x * 16..(x + 1) * 16]);
-            let r = <f32x16>::from_slice(&right[x * 16..(x + 1) * 16]);
-            sum += l * r;
-        }
-        normalize_cosine_distance(sum.reduce_sum())
-    }
-
-    pub unsafe fn normalize_vec_simd_aligned_unchecked(vec: &mut Embedding) {
-        //eprintln!("using {} ({} lanes)", stringify!(f32x16), 16);
-        let mut sum = <f32x16>::splat(0.);
-        let exp = <f32x16>::splat(2.);
-        for x in 0..vec.len() / 16 {
-            let part = <f32x16>::from_slice(&vec[x * 16..(x + 1) * 16]);
-            sum += part * part;
-        }
-        let magnitude = sum.reduce_sum().sqrt();
-        //eprintln!("simd magnitude: {}", magnitude);
-        let magnitude = <f32x16>::splat(magnitude);
-
-        for x in 0..vec.len() / 16 {
-            let subvecs = &mut vec[x * 16..(x + 1) * 16];
-            let scaled = <f32x16>::from_slice(subvecs) / magnitude;
-            subvecs.copy_from_slice(scaled.to_array().as_ref());
-        }
-    }
-
-    pub fn normalized_cosine_distance_simd_unaligned(left: &Embedding, right: &Embedding) -> f32 {
-        //eprintln!("using {} ({} lanes, unaligned)", stringify!(f32x16), 16);
-        let mut sum = <f32x16>::splat(0.);
-        for x in 0..left.len() / 16 {
-            let l = <f32x16>::from_slice(&left[x * 16..(x + 1) * 16]);
-            let r = <f32x16>::from_slice(&right[x * 16..(x + 1) * 16]);
-            sum += l * r;
-        }
-        normalize_cosine_distance(sum.reduce_sum())
-    }
-
-    pub fn normalize_vec_simd_unaligned(vec: &mut Embedding) {
         //eprintln!("using {} ({} lanes, unaligned)", stringify!(f32x16), 16);
         let mut sum = <f32x16>::splat(0.);
         //let exp = <f32x16>::splat(2.);
@@ -171,10 +155,7 @@ pub mod simd {
 mod tests {
     use assert_float_eq::*;
     use rand::{rngs::StdRng, SeedableRng};
-
-    use crate::vecmath::simd::{
-        normalize_vec_simd_unaligned, normalized_cosine_distance_simd_unaligned,
-    };
+    use tests::simd::normalize_vec_simd;
 
     use super::*;
     #[test]
@@ -188,7 +169,7 @@ mod tests {
         assert_eq!(e1, e2);
 
         normalize_vec_scalar(&mut e1);
-        normalize_vec_simd_unaligned(&mut e2);
+        normalize_vec_simd(&mut e2);
 
         eprintln!(
             "distance (scalar): {}",
@@ -196,11 +177,11 @@ mod tests {
         );
         eprintln!(
             "distance (simd): {}",
-            normalized_cosine_distance_simd_unaligned(&e1, &e2)
+            normalized_cosine_distance_simd(&e1, &e2)
         );
         eprintln!(
             "distance (simd same): {}",
-            normalized_cosine_distance_simd_unaligned(&e1, &e1)
+            normalized_cosine_distance_simd(&e1, &e1)
         );
 
         let mut e3 = random_embedding(&mut rng);
@@ -211,7 +192,7 @@ mod tests {
         );
         eprintln!(
             "distance (simd): {}",
-            normalized_cosine_distance_simd_unaligned(&e1, &e3)
+            normalized_cosine_distance_simd(&e1, &e3)
         );
 
         for (x1, x2) in e1.iter().zip(e2.iter()) {

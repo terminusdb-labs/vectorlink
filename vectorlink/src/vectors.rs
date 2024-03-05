@@ -20,6 +20,7 @@ use serde::Serialize;
 use urlencoding::encode;
 
 use crate::vecmath::{Embedding, EmbeddingBytes, EMBEDDING_BYTE_LENGTH, EMBEDDING_LENGTH};
+use parallel_hnsw::pq::HnswQuantizer;
 
 // 3 memory pages of 4K hold 2 OpenAI vectors.
 // We set things up so that blocks are some multiple of 2 pages.
@@ -40,6 +41,12 @@ struct PinnedVectorPage {
     page: LoadedVectorPage,
     handle: Weak<PageHandle>,
 }
+
+/*
+pub struct QuantizedDomain {
+    quantizer: HnswQuantizer,
+}
+*/
 
 pub struct Domain {
     name: Arc<String>,
