@@ -19,7 +19,11 @@ use rayon::iter::{IndexedParallelIterator, ParallelIterator};
 use serde::Serialize;
 use urlencoding::encode;
 
-use crate::vecmath::{Embedding, EmbeddingBytes, EMBEDDING_BYTE_LENGTH, EMBEDDING_LENGTH};
+use crate::comparator::Centroid32Comparator;
+use crate::vecmath::{
+    Centroid32, Embedding, EmbeddingBytes, CENTROID_32_LENGTH, EMBEDDING_BYTE_LENGTH,
+    EMBEDDING_LENGTH, QUANTIZED_EMBEDDING_LENGTH,
+};
 use parallel_hnsw::pq::HnswQuantizer;
 
 // 3 memory pages of 4K hold 2 OpenAI vectors.
@@ -42,11 +46,16 @@ struct PinnedVectorPage {
     handle: Weak<PageHandle>,
 }
 
-/*
 pub struct QuantizedDomain {
-    quantizer: HnswQuantizer,
+    vecs: Arc<RwLock<Vec<Centroid32>>>,
+    file: Arc<Mutex<File>>,
+    quantizer: HnswQuantizer<
+        EMBEDDING_LENGTH,
+        CENTROID_32_LENGTH,
+        QUANTIZED_EMBEDDING_LENGTH,
+        Centroid32Comparator,
+    >,
 }
-*/
 
 pub struct Domain {
     name: Arc<String>,
@@ -54,6 +63,7 @@ pub struct Domain {
     read_file: File,
     write_file: Mutex<File>,
     num_vecs: AtomicUsize,
+    quantized: Option<QuantizedDomain>,
 }
 
 impl Domain {
@@ -90,6 +100,7 @@ impl Domain {
             read_file,
             write_file,
             num_vecs,
+            quantized: None,
         })
     }
 
@@ -103,6 +114,10 @@ impl Domain {
             let bytes: &EmbeddingBytes = unsafe { std::mem::transmute(embedding) };
             write_file.write_all(bytes)?;
             count += 1;
+            if let Some(q) = self.quantized.as_ref() {
+                // quantize
+                //q.quantizer.quantize();
+            }
         }
         write_file.flush()?;
         write_file.sync_data()?;

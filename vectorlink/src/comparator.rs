@@ -124,3 +124,5 @@ impl Serializable for Centroid32Comparator {
         })
     }
 }
+
+pub struct QuantizedComparator {}
