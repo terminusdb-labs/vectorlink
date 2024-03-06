@@ -257,7 +257,7 @@ pub async fn index_using_operations_and_vectors<
 
     eprintln!("ready to generate hnsw");
     if quantize_hnsw {
-        let number_of_vectors = NUMBER_OF_CENTROIDS / QUANTIZED_EMBEDDING_LENGTH;
+        let number_of_vectors = NUMBER_OF_CENTROIDS;
         let cc = Centroid32Comparator::default();
         let qc = QuantizedComparator {
             cc: cc.clone(),
