@@ -1,9 +1,12 @@
+use itertools::{IntoChunks, Itertools};
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
+use std::marker::PhantomData;
 use std::ops::Deref;
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::{RwLock, RwLockReadGuard};
 use std::{path::Path, sync::Arc};
 
@@ -261,7 +264,37 @@ impl pq::VectorSelector for OpenAIComparator {
 
     fn vector_chunks(&self) -> impl Iterator<Item = Vec<Self::T>> {
         // low quality make better
-        (0..self.domain.num_vecs())
-            .map(|index| vec![*self.store.get_vec(&self.domain, index).unwrap().unwrap()])
+        let iter = (0..self.domain.num_vecs())
+            .map(|index| *self.store.get_vec(&self.domain, index).unwrap().unwrap());
+
+        ChunkedVecIterator {
+            iter,
+            _x: PhantomData,
+        }
+    }
+}
+
+pub struct ChunkedVecIterator<T, I: Iterator<Item = T>> {
+    iter: I,
+    _x: PhantomData<T>,
+}
+
+impl<T, I: Iterator<Item = T>> Iterator for ChunkedVecIterator<T, I> {
+    type Item = Vec<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut chunk = Vec::with_capacity(1_000_000);
+        while let Some(item) = self.iter.next() {
+            chunk.push(item);
+            if chunk.len() == 16_384 {
+                break;
+            }
+        }
+
+        if chunk.is_empty() {
+            None
+        } else {
+            Some(chunk)
+        }
     }
 }
