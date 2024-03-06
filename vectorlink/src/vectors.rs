@@ -14,7 +14,7 @@ use std::sync::atomic::{self, AtomicUsize};
 use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 
 use lru::LruCache;
-use rand::thread_rng;
+use rand::{thread_rng, Rng};
 use rayon::iter::plumbing::{bridge_producer_consumer, Producer};
 use rayon::iter::{IndexedParallelIterator, ParallelIterator};
 use serde::Serialize;
@@ -633,21 +633,21 @@ impl VectorStore {
 
     pub fn get_random_vectors(&self, domain: &Domain, count: usize) -> io::Result<Vec<Embedding>> {
         let mut rng = thread_rng();
-        let total = self.num_vecs();
-        let candidates: HashSet<usize> = HashSet::new();
+        let total = domain.num_vecs();
+        let mut candidates: HashSet<usize> = HashSet::new();
         assert!(total > count);
         loop {
             if candidates.len() == count {
                 break;
             } else {
                 let res = rng.gen_range(0..=total);
-                candidates.insert(res)
+                candidates.insert(res);
             }
         }
-        let vecs = Vec::with_capacity(count);
+        let mut vecs = Vec::with_capacity(count);
 
         for k in candidates {
-            let v = *self.get_vec(domain, k)?;
+            let v = *self.get_vec(domain, k)?.unwrap();
             vecs.push(v)
         }
         Ok(vecs)

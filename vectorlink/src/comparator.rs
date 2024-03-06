@@ -9,7 +9,9 @@ use std::{path::Path, sync::Arc};
 
 use parallel_hnsw::{pq, AbstractVector, Comparator, Serializable, SerializationError, VectorId};
 
-use crate::vecmath::{self, Centroid32, QuantizedEmbedding, CENTROID_32_BYTE_LENGTH};
+use crate::vecmath::{
+    self, Centroid32, QuantizedEmbedding, CENTROID_32_BYTE_LENGTH, QUANTIZED_EMBEDDING_LENGTH,
+};
 use crate::vectors::LoadedVec;
 use crate::{
     vecmath::{normalized_cosine_distance, Embedding},
@@ -79,16 +81,19 @@ impl Serializable for OpenAIComparator {
 
 #[derive(Clone, Default)]
 pub struct Centroid32Comparator {
-    centroids: Arc<Vec<Centroid32>>,
+    centroids: Arc<RwLock<Vec<Centroid32>>>,
 }
 
 impl Comparator for Centroid32Comparator {
     type T = Centroid32;
 
-    type Borrowable<'a> = &'a Centroid32;
+    type Borrowable<'a> = ReadLockedVec<'a, Centroid32>;
 
     fn lookup(&self, v: VectorId) -> Self::Borrowable<'_> {
-        &self.centroids[v.0]
+        ReadLockedVec {
+            lock: self.centroids.read().unwrap(),
+            id: v,
+        }
     }
 
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
@@ -100,10 +105,12 @@ impl Serializable for Centroid32Comparator {
     type Params = ();
 
     fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
+        let centroids = self.centroids.read().unwrap();
+        let len = centroids.len();
         let buf: &[u8] = unsafe {
             std::slice::from_raw_parts(
-                self.centroids.as_ptr() as *const u8,
-                self.centroids.len() * std::mem::size_of::<Centroid32>(),
+                centroids.as_ptr() as *const u8,
+                len * std::mem::size_of::<Centroid32>(),
             )
         };
         std::fs::write(path, buf)?;
@@ -123,18 +130,33 @@ impl Serializable for Centroid32Comparator {
         file.read_exact(buf)?;
 
         Ok(Self {
-            centroids: Arc::new(vec),
+            centroids: Arc::new(RwLock::new(vec)),
         })
+    }
+}
+
+impl parallel_hnsw::pq::VectorStore for Centroid32Comparator {
+    type T = <Centroid32Comparator as Comparator>::T;
+
+    fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
+        let mut data = self.centroids.write().unwrap();
+        let vid = data.len();
+        let mut vectors: Vec<VectorId> = Vec::new();
+        data.extend(i.enumerate().map(|(i, v)| {
+            vectors.push(VectorId(vid + i));
+            v
+        }));
+        vectors
     }
 }
 
 #[derive(Clone)]
 pub struct QuantizedComparator {
-    cc: Centroid32Comparator,
-    data: Arc<RwLock<Vec<QuantizedEmbedding>>>,
+    pub cc: Centroid32Comparator,
+    pub data: Arc<RwLock<Vec<QuantizedEmbedding>>>,
 }
 
-struct ReadLockedVec<'a, T> {
+pub struct ReadLockedVec<'a, T> {
     lock: RwLockReadGuard<'a, Vec<T>>,
     id: VectorId,
 }
@@ -162,11 +184,11 @@ impl Comparator for QuantizedComparator {
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
         let v_reconstruct1: Vec<f32> = v1
             .iter()
-            .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter().copied())
+            .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter())
             .collect();
         let v_reconstruct2: Vec<f32> = v2
             .iter()
-            .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter().copied())
+            .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter())
             .collect();
         let mut ar1 = [0.0_f32; 1536];
         let mut ar2 = [0.0_f32; 1536];
@@ -206,7 +228,7 @@ impl Serializable for QuantizedComparator {
         let size = std::fs::metadata(&path)?.size() as usize;
         assert_eq!(0, size % std::mem::size_of::<QuantizedEmbedding>());
         let number_of_quantized = size / std::mem::size_of::<QuantizedEmbedding>();
-        let mut vec = vec![Default::default(); number_of_quantized];
+        let mut vec = vec![[0_u16; QUANTIZED_EMBEDDING_LENGTH]; number_of_quantized];
         let mut file = std::fs::File::open(&vector_path)?;
         let buf = unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr() as *mut u8, size) };
         file.read_exact(buf)?;

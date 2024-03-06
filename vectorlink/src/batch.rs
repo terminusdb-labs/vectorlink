@@ -7,6 +7,8 @@ use std::{
 };
 
 use futures::{future, Stream, StreamExt, TryStreamExt};
+use parallel_hnsw::pq::QuantizedHnsw;
+use parallel_hnsw::Serializable;
 use parallel_hnsw::{Hnsw, VectorId};
 use thiserror::Error;
 use tokio::{
@@ -17,14 +19,14 @@ use tokio_stream::wrappers::LinesStream;
 use urlencoding::encode;
 
 use crate::{
-    comparator::OpenAIComparator,
+    comparator::{Centroid32Comparator, OpenAIComparator, QuantizedComparator},
     indexer::{
         create_index_name, deserialize_index, index_serialization_path, serialize_index, HnswIndex,
         OpenAI, Point,
     },
     openai::{embeddings_for, EmbeddingError, Model},
     server::Operation,
-    vecmath::Embedding,
+    vecmath::{Embedding, QUANTIZED_EMBEDDING_LENGTH},
     vectors::VectorStore,
 };
 
@@ -174,6 +176,7 @@ pub async fn extend_vector_store<P0: AsRef<Path>, P1: AsRef<Path>>(
 }
 
 const INDEX_CHECKPOINT_SIZE: usize = 1_000;
+const NUMBER_OF_CENTROIDS: usize = 10_000;
 pub async fn index_using_operations_and_vectors<
     P0: AsRef<Path>,
     P1: AsRef<Path>,
@@ -256,11 +259,14 @@ pub async fn index_using_operations_and_vectors<
     if quantize_hnsw {
         let number_of_vectors = NUMBER_OF_CENTROIDS / QUANTIZED_EMBEDDING_LENGTH;
         let cc = Centroid32Comparator::default();
-        let qc = QuantizedComparator{ cc, data: Default::default() };
+        let qc = QuantizedComparator {
+            cc: cc.clone(),
+            data: Default::default(),
+        };
         let c = comparator;
         let hnsw = QuantizedHnsw::new(number_of_vectors, cc, qc, c);
         hnsw.serialize(&staging_file).unwrap();
-    }else{
+    } else {
         let hnsw = Hnsw::generate(comparator, vecs, 24, 48, 12);
         eprintln!("done generating hnsw");
         hnsw.serialize(&staging_file).unwrap();
@@ -270,7 +276,7 @@ pub async fn index_using_operations_and_vectors<
     tokio::fs::rename(&staging_file, &final_file).await?;
     eprintln!("renamed hnsw");
     Ok(())
-};
+}
 
 pub async fn index_from_operations_file<P: AsRef<Path>>(
     api_key: &str,
