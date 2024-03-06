@@ -180,7 +180,7 @@ impl Domain {
         Ok(size)
     }
 
-    fn num_vecs(&self) -> usize {
+    pub fn num_vecs(&self) -> usize {
         self.num_vecs.load(atomic::Ordering::Relaxed)
     }
 }

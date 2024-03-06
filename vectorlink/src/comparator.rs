@@ -260,7 +260,8 @@ impl pq::VectorSelector for OpenAIComparator {
     }
 
     fn vector_chunks(&self) -> impl Iterator<Item = Vec<Self::T>> {
-        todo!();
-        std::iter::empty()
+        // low quality make better
+        (0..self.domain.num_vecs())
+            .map(|index| vec![*self.store.get_vec(&self.domain, index).unwrap().unwrap()])
     }
 }
