@@ -100,7 +100,7 @@ impl Comparator for Centroid32Comparator {
     }
 
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
-        vecmath::normalized_cosine_distance_32(v1, v2)
+        vecmath::euclidean_distance_32(v1, v2)
     }
 }
 
