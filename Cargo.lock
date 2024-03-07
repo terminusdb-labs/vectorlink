@@ -1820,6 +1820,7 @@ dependencies = [
  "hyper",
  "itertools 0.10.5",
  "lazy_static",
+ "libc",
  "lru",
  "parallel-hnsw",
  "rand",
