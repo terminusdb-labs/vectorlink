@@ -10,12 +10,12 @@ use std::{
     path::Path,
 };
 
-pub struct LoadedVectors<T> {
+pub struct LoadedVectorRange<T> {
     range: Range<usize>,
     vecs: Vec<T>,
 }
 
-impl<T: Copy> LoadedVectors<T> {
+impl<T: Copy> LoadedVectorRange<T> {
     pub fn load(file: &File, range: Range<usize>) -> io::Result<Self> {
         let size = std::mem::size_of::<T>() * range.len();
         let mut vecs: Vec<T> = Vec::with_capacity(range.len());
@@ -66,8 +66,8 @@ impl<T: Copy> VectorLoader<T> {
         Ok(Self::new(file))
     }
 
-    pub fn load_range(&self, range: Range<usize>) -> io::Result<LoadedVectors<T>> {
-        LoadedVectors::load(&self.file, range)
+    pub fn load_range(&self, range: Range<usize>) -> io::Result<LoadedVectorRange<T>> {
+        LoadedVectorRange::load(&self.file, range)
     }
 
     pub fn vec(&self, index: usize) -> io::Result<Box<T>> {
