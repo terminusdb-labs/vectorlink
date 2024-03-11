@@ -50,12 +50,6 @@ struct PinnedVectorPage {
 pub struct QuantizedDomain {
     vecs: Arc<RwLock<Vec<Centroid32>>>,
     file: Arc<Mutex<File>>,
-    quantizer: HnswQuantizer<
-        EMBEDDING_LENGTH,
-        CENTROID_32_LENGTH,
-        QUANTIZED_EMBEDDING_LENGTH,
-        Centroid32Comparator,
-    >,
 }
 
 pub struct Domain {
@@ -64,7 +58,6 @@ pub struct Domain {
     read_file: File,
     write_file: Mutex<File>,
     num_vecs: AtomicUsize,
-    quantized: Option<QuantizedDomain>,
 }
 
 impl Domain {
@@ -101,7 +94,6 @@ impl Domain {
             read_file,
             write_file,
             num_vecs,
-            quantized: None,
         })
     }
 
@@ -115,10 +107,6 @@ impl Domain {
             let bytes: &EmbeddingBytes = unsafe { std::mem::transmute(embedding) };
             write_file.write_all(bytes)?;
             count += 1;
-            if let Some(q) = self.quantized.as_ref() {
-                // quantize
-                //q.quantizer.quantize();
-            }
         }
         write_file.flush()?;
         write_file.sync_data()?;
