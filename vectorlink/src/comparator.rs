@@ -207,7 +207,7 @@ impl Serializable for QuantizedComparator {
     fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
         let path_buf: PathBuf = path.as_ref().into();
         let index_path = path_buf.join("index");
-        std::fs::create_dir_all(&index_path);
+        std::fs::create_dir_all(&index_path)?;
         self.cc.serialize(index_path)?;
 
         let vector_path = path_buf.join("vectors");
@@ -297,5 +297,37 @@ impl<T, I: Iterator<Item = T>> Iterator for ChunkedVecIterator<T, I> {
         } else {
             Some(chunk)
         }
+    }
+}
+
+mod tests {
+    use std::sync::{Arc, RwLock};
+
+    use parallel_hnsw::{bigvec::random_normed_vec, AbstractVector};
+
+    use crate::comparator::Centroid32Comparator;
+    use crate::comparator::Comparator;
+    #[test]
+    fn centroid32test() {
+        /*
+        let vectors = (0..1000)
+            .map(|_| {
+                let range = Uniform::from(0.0..1.0);
+                let v: Vec<f32> = prng.sample_iter(&range).take(CENTROID_32_LENGTH).collect();
+                v
+            })
+            .collect();
+         */
+        let vectors = Vec::new();
+        let centroids = Arc::new(RwLock::new(vectors));
+        let cc = Centroid32Comparator { centroids };
+        let mut v1 = [0.0_f32; 32];
+        v1[0] = 1.0;
+        v1[1] = 1.0;
+        let mut v2 = [0.0_f32; 32];
+        v2[30] = 1.0;
+        v2[31] = 1.0;
+        let res = cc.compare_vec(AbstractVector::Unstored(&v1), AbstractVector::Unstored(&v2));
+        assert_eq!(res, 2.0);
     }
 }
