@@ -33,6 +33,7 @@ impl<T: Copy> LoadedVectorRange<T> {
         Ok(Self { range, vecs })
     }
 
+    #[allow(unused)]
     pub fn valid_for(&self, range: Range<usize>) -> bool {
         self.range.contains(&range.start) && self.range.contains(&range.end)
     }
@@ -94,11 +95,13 @@ impl<T: Copy> VectorLoader<T> {
     }
 }
 
+#[allow(unused)]
 pub struct SequentialVectorLoader<T> {
     file: File,
     _x: PhantomData<T>,
 }
 
+#[allow(unused)]
 impl<T> SequentialVectorLoader<T> {
     pub fn new(file: File) -> Self {
         Self {

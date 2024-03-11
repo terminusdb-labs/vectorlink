@@ -172,7 +172,6 @@ pub async fn extend_vector_store<P0: AsRef<Path>, P1: AsRef<Path>>(
     domain.concatenate_file(&vec_path)
 }
 
-const INDEX_CHECKPOINT_SIZE: usize = 1_000;
 const NUMBER_OF_CENTROIDS: usize = 10_000;
 pub async fn index_using_operations_and_vectors<
     P0: AsRef<Path>,
@@ -214,9 +213,7 @@ pub async fn index_using_operations_and_vectors<
     let domain_obj = vs.get_domain(domain)?;
     let mut op_file = File::open(&op_file_path).await?;
     let mut op_stream = get_operations_from_file(&mut op_file).await?;
-    let start_at: usize = offset as usize;
     let mut i: usize = 0;
-    let temp_file_name = "temp_index";
     let index_file_name = "index";
     //    let temp_file = index_serialization_path(&staging_path, temp_file_name);
     let staging_file = index_serialization_path(&staging_path, index_file_name);

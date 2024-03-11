@@ -258,7 +258,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .0;
             eprintln!("{:?}", v);
         }
-        Commands::Compare { key, s1, s2, model } => {
+        Commands::Compare { .. } => {
             todo!();
         }
         Commands::Compare2 {
@@ -320,15 +320,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             eprintln!("{}", distance);
         }
         Commands::Load {
-            key,
-            domain,
-            commit,
-            directory,
-            input,
-            size,
+            directory, input, ..
         } => {
-            let path = Path::new(&input);
-            let dirpath = Path::new(&directory);
+            let _path = Path::new(&input);
+            let _dirpath = Path::new(&directory);
             panic!("yikes!");
             /*
             let mut hnsw: HnswIndex<OpenAIComparator, = Hnsw::new(OpenAI);
@@ -584,7 +579,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             directory,
             size,
             improve_neighbors,
-            promote,
+            promote: _promote,
         } => {
             let dirpath = Path::new(&directory);
             let hnsw_index_path = dbg!(format!(
@@ -600,7 +595,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             if let Some(threshold) = improve_neighbors {
                 hnsw.improve_neighbors(threshold);
                 // TODO should write to staging first
-                hnsw.serialize(hnsw_index_path);
+                hnsw.serialize(hnsw_index_path).unwrap();
             } else {
                 todo!();
             }
