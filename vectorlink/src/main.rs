@@ -1,7 +1,6 @@
 #![feature(portable_simd)]
 
 use std::collections::HashSet;
-use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Write;
 use std::path::Path;
@@ -12,6 +11,7 @@ mod comparator;
 mod indexer;
 mod openai;
 mod server;
+mod store;
 mod vecmath;
 mod vectors;
 
@@ -19,20 +19,11 @@ use batch::index_from_operations_file;
 use clap::CommandFactory;
 use clap::{Parser, Subcommand, ValueEnum};
 //use hnsw::Hnsw;
-use indexer::start_indexing_from_operations;
-use indexer::Point;
-use indexer::{index_serialization_path, serialize_index};
-use indexer::{operations_to_point_operations, OpenAI};
-use itertools::Itertools;
 use openai::Model;
-use parallel_hnsw::{AbstractVector, AllVectorIterator, Hnsw, NodeDistance, NodeId, VectorId};
-use rand::thread_rng;
+use parallel_hnsw::{AbstractVector, NodeDistance, NodeId, VectorId};
 use rand::*;
-use serde_json::json;
-use server::Operation;
-use space::Metric;
 use std::fs::File;
-use std::io::{self, BufRead};
+use std::io;
 use vecmath::EMBEDDING_BYTE_LENGTH;
 use vecmath::EMBEDDING_LENGTH;
 
@@ -268,20 +259,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             eprintln!("{:?}", v);
         }
         Commands::Compare { key, s1, s2, model } => {
-            let v = openai::embeddings_for(&key_or_env(key), &[s1, s2], model)
-                .await?
-                .0;
-            let p1 = Point::Mem {
-                vec: Box::new(v[0]),
-            };
-            let p2 = Point::Mem {
-                vec: Box::new(v[1]),
-            };
-            println!(
-                "same? {}, distance: {}",
-                p1 == p2,
-                f32::from_bits(OpenAI.distance(&p1, &p2))
-            );
+            todo!();
         }
         Commands::Compare2 {
             key,

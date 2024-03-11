@@ -42,6 +42,13 @@ impl<T: Copy> LoadedVectorRange<T> {
 
         &self.vecs[index - self.range.start]
     }
+
+    pub fn vecs(&self) -> &[T] {
+        &self.vecs
+    }
+    pub fn len(&self) -> usize {
+        self.vecs.len()
+    }
 }
 
 pub struct VectorLoader<T> {
@@ -70,7 +77,7 @@ impl<T: Copy> VectorLoader<T> {
         LoadedVectorRange::load(&self.file, range)
     }
 
-    pub fn vec(&self, index: usize) -> io::Result<Box<T>> {
+    pub fn vec(&self, index: usize) -> io::Result<T> {
         let size = std::mem::size_of::<T>();
         let mut data: Vec<u8> = Vec::with_capacity(size);
         {
@@ -82,7 +89,7 @@ impl<T: Copy> VectorLoader<T> {
         unsafe {
             data.set_len(size);
 
-            Ok(Box::new(*(data.as_ptr() as *const T)))
+            Ok(*(data.as_ptr() as *const T))
         }
     }
 }

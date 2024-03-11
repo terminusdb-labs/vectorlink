@@ -96,60 +96,6 @@ enum Op {
     Changed,
 }
 
-pub async fn operations_to_point_operations(
-    domain: &Domain,
-    vector_store: &VectorStore,
-    structs: Vec<Result<Operation, std::io::Error>>,
-    key: &str,
-    model: Model,
-) -> Result<(Vec<PointOperation>, usize), IndexError> {
-    eprintln!("start operations_to_point_operations");
-    // Should not unwrap here -
-    let ops: Vec<Operation> = structs.into_iter().collect::<Result<Vec<_>, _>>()?;
-    let tuples: Vec<(Op, String, String)> = ops
-        .iter()
-        .flat_map(|o| match o {
-            Operation::Inserted { string, id } => Some((Op::Insert, string.into(), id.into())),
-            Operation::Changed { string, id } => Some((Op::Changed, string.into(), id.into())),
-            Operation::Deleted { id: _ } => None,
-            Operation::Error { message } => {
-                eprintln!("{}", message);
-                None
-            }
-        })
-        .collect();
-    let strings: Vec<String> = tuples.iter().map(|(_, s, _)| s.to_string()).collect();
-    let vecs: (Vec<Embedding>, usize) = if strings.is_empty() {
-        (Vec::new(), 0)
-    } else {
-        eprintln!("start embedding");
-        let result = embeddings_for(key, &strings, model).await?;
-        eprintln!("end embedding");
-        result
-    };
-    let loaded_vecs: Vec<LoadedVec> = vector_store.add_and_load_vecs(domain, vecs.0.iter())?;
-    let mut new_ops: Vec<PointOperation> = zip(tuples, loaded_vecs)
-        .map(|((op, _, id), vec)| match op {
-            Op::Insert => PointOperation::Insert {
-                point: Point::Stored { vec, id },
-            },
-            Op::Changed => PointOperation::Replace {
-                point: Point::Stored { vec, id },
-            },
-        })
-        .collect();
-    let mut delete_ops: Vec<_> = ops
-        .into_iter()
-        .flat_map(|o| match o {
-            Operation::Deleted { id } => Some(PointOperation::Delete { id }),
-            _ => None,
-        })
-        .collect();
-    new_ops.append(&mut delete_ops);
-    eprintln!("end operations_to_point_operations");
-    Ok((new_ops, vecs.1))
-}
-
 pub struct IndexIdentifier {
     pub previous: Option<String>,
     pub commit: String,

@@ -20,13 +20,10 @@ use urlencoding::encode;
 
 use crate::{
     comparator::{Centroid32Comparator, OpenAIComparator, QuantizedComparator},
-    indexer::{
-        create_index_name, deserialize_index, index_serialization_path, serialize_index, HnswIndex,
-        OpenAI, Point,
-    },
+    indexer::{create_index_name, index_serialization_path},
     openai::{embeddings_for, EmbeddingError, Model},
     server::Operation,
-    vecmath::{Embedding, QUANTIZED_EMBEDDING_LENGTH},
+    vecmath::Embedding,
     vectors::VectorStore,
 };
 
@@ -247,10 +244,10 @@ pub async fn index_using_operations_and_vectors<
             }
         }
     }
-    let comparator = OpenAIComparator {
-        domain: domain_obj.clone(),
-        store: Arc::new(vs),
-    };
+    let comparator = OpenAIComparator::new(
+        domain_obj.name().to_string(),
+        Arc::new(domain_obj.all_vecs()?),
+    );
     let vecs: Vec<_> = (offset as usize..(offset as usize + i))
         .map(VectorId)
         .collect();

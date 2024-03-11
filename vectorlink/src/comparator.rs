@@ -1,44 +1,50 @@
-use itertools::{IntoChunks, Itertools};
+use rand::distributions::Uniform;
+use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
-use std::marker::PhantomData;
 use std::ops::Deref;
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::{RwLock, RwLockReadGuard};
 use std::{path::Path, sync::Arc};
 
-use parallel_hnsw::{pq, AbstractVector, Comparator, Serializable, SerializationError, VectorId};
+use parallel_hnsw::{pq, Comparator, Serializable, SerializationError, VectorId};
 
+use crate::store::LoadedVectorRange;
 use crate::vecmath::{
     self, Centroid32, QuantizedEmbedding, CENTROID_32_BYTE_LENGTH, QUANTIZED_EMBEDDING_LENGTH,
 };
-use crate::vectors::LoadedVec;
 use crate::{
     vecmath::{normalized_cosine_distance, Embedding},
-    vectors::{Domain, VectorStore},
+    vectors::VectorStore,
 };
 
 #[derive(Clone)]
 pub struct OpenAIComparator {
-    pub domain: Arc<Domain>,
-    pub store: Arc<VectorStore>,
+    domain_name: String,
+    range: Arc<LoadedVectorRange<Embedding>>,
+}
+
+impl OpenAIComparator {
+    pub fn new(domain_name: String, range: Arc<LoadedVectorRange<Embedding>>) -> Self {
+        Self { domain_name, range }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct ComparatorMeta {
-    domain: String,
+    domain_name: String,
     size: usize,
 }
 
 impl Comparator for OpenAIComparator {
     type T = Embedding;
-    type Borrowable<'a> = LoadedVec
+    type Borrowable<'a> = &'a Embedding
         where Self: 'a;
-    fn lookup(&self, v: VectorId) -> LoadedVec {
-        self.store.get_vec(&self.domain, v.0).unwrap().unwrap()
+    fn lookup(&self, v: VectorId) -> &Embedding {
+        self.range.vec(v.0)
     }
 
     fn compare_raw(&self, v1: &Embedding, v2: &Embedding) -> f32 {
@@ -52,12 +58,10 @@ impl Serializable for OpenAIComparator {
         let mut comparator_file: std::fs::File =
             OpenOptions::new().write(true).create(true).open(path)?;
         eprintln!("opened comparator serialize file");
-        let domain = self.domain.name();
         // How do we get this value?
-        let size = 2_000_000;
         let comparator = ComparatorMeta {
-            domain: domain.to_string(),
-            size,
+            domain_name: self.domain_name.clone(),
+            size: self.range.len(),
         };
         let comparator_meta = serde_json::to_string(&comparator)?;
         eprintln!("serialized comparator");
@@ -73,11 +77,11 @@ impl Serializable for OpenAIComparator {
         let mut comparator_file = OpenOptions::new().read(true).open(path)?;
         let mut contents = String::new();
         comparator_file.read_to_string(&mut contents)?;
-        let ComparatorMeta { domain, size } = serde_json::from_str(&contents)?;
-        let domain = store.get_domain(&domain)?;
+        let ComparatorMeta { domain_name, .. } = serde_json::from_str(&contents)?;
+        let domain = store.get_domain(&domain_name)?;
         Ok(OpenAIComparator {
-            domain,
-            store: store.into(),
+            domain_name,
+            range: Arc::new(domain.all_vecs()?),
         })
     }
 }
@@ -221,7 +225,7 @@ impl Serializable for QuantizedComparator {
 
     fn deserialize<P: AsRef<Path>>(
         path: P,
-        params: Self::Params,
+        _params: Self::Params,
     ) -> Result<Self, SerializationError> {
         let path_buf: PathBuf = path.as_ref().into();
         let index_path = path_buf.join("index");
@@ -260,53 +264,28 @@ impl pq::VectorSelector for OpenAIComparator {
     type T = Embedding;
 
     fn selection(&self, size: usize) -> Vec<Self::T> {
-        self.store.get_random_vectors(&self.domain, size).unwrap()
+        // TODO do something else for sizes close to number of vecs
+        let mut rng = thread_rng();
+        let mut set = HashSet::new();
+        let range = Uniform::from(0_usize..size);
+        while set.len() != size {
+            let candidate = rng.sample(&range);
+            set.insert(candidate);
+        }
+
+        set.into_iter()
+            .map(|index| *self.range.vec(index))
+            .collect()
     }
 
     fn vector_chunks(&self) -> impl Iterator<Item = Vec<Self::T>> {
         // low quality make better
-        let iter = (0..self.domain.num_vecs())
-            .map(|index| *self.store.get_vec(&self.domain, index).unwrap().unwrap());
-
-        ChunkedVecIterator {
-            iter,
-            _x: PhantomData,
-        }
+        self.range.vecs().chunks(1_000_000).map(|c| c.to_vec())
     }
 }
 
-pub struct ChunkedVecIterator<T, I: Iterator<Item = T>> {
-    iter: I,
-    _x: PhantomData<T>,
-}
-
-impl<T, I: Iterator<Item = T>> Iterator for ChunkedVecIterator<T, I> {
-    type Item = Vec<T>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let mut chunk = Vec::with_capacity(1_000_000);
-        while let Some(item) = self.iter.next() {
-            chunk.push(item);
-            if chunk.len() == 16_384 {
-                break;
-            }
-        }
-
-        if chunk.is_empty() {
-            None
-        } else {
-            Some(chunk)
-        }
-    }
-}
-
+#[cfg(test)]
 mod tests {
-    use std::sync::{Arc, RwLock};
-
-    use parallel_hnsw::{bigvec::random_normed_vec, AbstractVector};
-
-    use crate::comparator::Centroid32Comparator;
-    use crate::comparator::Comparator;
     #[test]
     fn centroid32test() {
         /*

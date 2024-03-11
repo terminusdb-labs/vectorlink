@@ -49,7 +49,6 @@ use tokio_util::io::StreamReader;
 use crate::indexer::create_index_name;
 use crate::indexer::deserialize_index;
 use crate::indexer::index_serialization_path;
-use crate::indexer::operations_to_point_operations;
 use crate::indexer::search;
 use crate::indexer::serialize_index;
 use crate::indexer::IndexError;
@@ -554,10 +553,13 @@ impl Service {
         )
         .await?
         .chunks(100);
+        /*
         self.process_operation_chunks(
             opstream, domain, commit, previous, index_id, task_id, &api_key, model,
         )
         .await
+        */
+        todo!();
     }
 
     fn start_indexing(
@@ -659,91 +661,6 @@ impl Service {
             serialize_index(file_name, &index).unwrap();
         });
         Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn process_operation_chunks(
-        self: &Arc<Self>,
-        mut opstream: futures::stream::Chunks<
-            impl Stream<Item = Result<Operation, io::Error>> + Unpin,
-        >,
-        domain: String,
-        commit: String,
-        previous: Option<String>,
-        index_id: &str,
-        task_id: &str,
-        api_key: &str,
-        model: Model,
-    ) -> Result<(String, Arc<HnswIndex>), ResponseError> {
-        let id = create_index_name(&domain, &commit);
-        let mut hnsw = self
-            .load_hnsw_for_indexing(IndexIdentifier {
-                domain: domain.clone(),
-                commit,
-                previous,
-            })
-            .await?;
-
-        let domain = self.vector_store.get_domain(&domain)?;
-        let old_status = self.get_task_status(task_id).await.unwrap();
-        self.set_task_status(
-            task_id.to_string(),
-            TaskStatus::Pending {
-                progress: 0.3,
-                start_time: old_status.start_time(),
-                num_retries: old_status.num_retries(),
-            },
-        )
-        .await;
-        // consume stream, spawn operation for each
-        let inner_domain = domain.clone();
-        let inner_vector_store = self.vector_store.clone();
-        let inner_api_key = api_key.to_string();
-        let mut taskstream = opstream
-            .map(move |structs| {
-                let inner_inner_domain = inner_domain.clone();
-                let inner_inner_vector_store = inner_vector_store.clone();
-                let inner_inner_api_key = inner_api_key.clone();
-                tokio::spawn(async move {
-                    operations_to_point_operations(
-                        &inner_inner_domain,
-                        &inner_inner_vector_store,
-                        structs,
-                        &inner_inner_api_key,
-                        model,
-                    )
-                    .await
-                })
-            })
-            .buffered(10);
-        while let Some(task) = taskstream.next().await {
-            let (new_ops, failures) = task??;
-            if failures != 0 {
-                let old_status = self.get_task_status(task_id).await.unwrap();
-                self.set_task_status(
-                    task_id.to_string(),
-                    TaskStatus::Pending {
-                        progress: 0.3,
-                        start_time: old_status.start_time(),
-                        num_retries: old_status.num_retries() + failures,
-                    },
-                );
-            }
-            hnsw = start_indexing_from_operations(hnsw, new_ops)?;
-            eprintln!("end of while");
-        }
-        self.set_task_status(
-            task_id.to_string(),
-            TaskStatus::Pending {
-                progress: 0.8,
-                start_time: old_status.start_time(),
-                num_retries: old_status.num_retries(),
-            },
-        )
-        .await;
-        let file_name = index_serialization_path(&self.path, index_id);
-        serialize_index(file_name, &hnsw)?;
-        Ok((id, hnsw))
     }
 
     async fn get_start_index(
@@ -865,9 +782,7 @@ impl Service {
                 string_response_or_error(result)
             }
             Ok(ResourceSpec::GetStatistics) => {
-                let statistics = self.vector_store.statistics();
-                let json_string = serde_json::to_string_pretty(&statistics).map_err(|e| e.into());
-                json_response_or_error(json_string)
+                todo!();
             }
             Ok(_) => todo!(),
             Err(e) => Ok(Response::builder()
