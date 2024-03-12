@@ -188,6 +188,8 @@ enum Commands {
         improve_neighbors: Option<f32>,
         #[arg(short, long)]
         promote: bool,
+        #[arg(short, long, default_value_t = 1.0)]
+        proportion: f32,
     },
     ScanNeighbors {
         #[arg(short, long)]
@@ -580,6 +582,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             size,
             improve_neighbors,
             promote: _promote,
+            proportion,
         } => {
             let dirpath = Path::new(&directory);
             let hnsw_index_path = dbg!(format!(
@@ -593,7 +596,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .unwrap();
 
             if let Some(threshold) = improve_neighbors {
-                hnsw.improve_neighbors(threshold);
+                hnsw.improve_neighbors(threshold, proportion);
                 // TODO should write to staging first
                 hnsw.serialize(hnsw_index_path)?;
             } else {
