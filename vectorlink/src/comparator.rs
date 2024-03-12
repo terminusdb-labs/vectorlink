@@ -210,8 +210,9 @@ impl Serializable for QuantizedComparator {
 
     fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
         let path_buf: PathBuf = path.as_ref().into();
+        std::fs::create_dir_all(&path_buf)?;
+
         let index_path = path_buf.join("index");
-        std::fs::create_dir_all(&index_path)?;
         self.cc.serialize(index_path)?;
 
         let vector_path = path_buf.join("vectors");

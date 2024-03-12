@@ -595,7 +595,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             if let Some(threshold) = improve_neighbors {
                 hnsw.improve_neighbors(threshold);
                 // TODO should write to staging first
-                hnsw.serialize(hnsw_index_path).unwrap();
+                hnsw.serialize(hnsw_index_path)?;
             } else {
                 todo!();
             }
