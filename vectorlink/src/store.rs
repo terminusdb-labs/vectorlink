@@ -85,7 +85,7 @@ impl<T: Copy> VectorLoader<T> {
             let buf = data.spare_capacity_mut();
             let bytes_buf =
                 unsafe { std::slice::from_raw_parts_mut(buf.as_ptr() as *mut u8, size) };
-            self.file.read_exact_at(bytes_buf, index as u64)?;
+            self.file.read_exact_at(bytes_buf, (index * size) as u64)?;
         }
         unsafe {
             data.set_len(size);
