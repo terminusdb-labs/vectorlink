@@ -7,8 +7,8 @@ use std::{
 };
 
 use futures::{future, Stream, StreamExt, TryStreamExt};
-use parallel_hnsw::pq::QuantizedHnsw;
 use parallel_hnsw::Serializable;
+use parallel_hnsw::{pq::QuantizedHnsw, SerializationError};
 use parallel_hnsw::{Hnsw, VectorId};
 use thiserror::Error;
 use tokio::{
@@ -44,6 +44,8 @@ pub enum BatchError {
 pub enum IndexingError {
     #[error(transparent)]
     Io(#[from] io::Error),
+    #[error(transparent)]
+    SerializationError(#[from] SerializationError),
 }
 
 #[derive(Error, Debug)]
@@ -265,11 +267,11 @@ pub async fn index_using_operations_and_vectors<
         };
         let c = comparator;
         let hnsw = QuantizedHnsw::new(number_of_vectors, cc, qc, c);
-        hnsw.serialize(&staging_file).unwrap();
+        hnsw.serialize(&staging_file)?;
     } else {
         let hnsw = Hnsw::generate(comparator, vecs, 24, 48, 12);
         eprintln!("done generating hnsw");
-        hnsw.serialize(&staging_file).unwrap();
+        hnsw.serialize(&staging_file)?;
     }
     eprintln!("done serializing hnsw");
     eprintln!("renaming {staging_file:?} to {final_file:?}");
