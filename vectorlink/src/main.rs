@@ -18,6 +18,9 @@ mod vectors;
 use batch::index_from_operations_file;
 use clap::CommandFactory;
 use clap::{Parser, Subcommand, ValueEnum};
+use comparator::Centroid32Comparator;
+use comparator::OpenAIComparator;
+use comparator::QuantizedComparator;
 //use hnsw::Hnsw;
 use indexer::start_indexing_from_operations;
 use indexer::Point;
@@ -25,6 +28,9 @@ use indexer::{index_serialization_path, serialize_index};
 use indexer::{operations_to_point_operations, OpenAI};
 use itertools::Itertools;
 use openai::Model;
+use parallel_hnsw::pq::HnswQuantizer;
+use parallel_hnsw::pq::QuantizedHnsw;
+use parallel_hnsw::Serializable;
 use parallel_hnsw::{AbstractVector, AllVectorIterator, Hnsw, NodeDistance, NodeId, VectorId};
 use rand::thread_rng;
 use rand::*;
@@ -33,8 +39,10 @@ use server::Operation;
 use space::Metric;
 use std::fs::File;
 use std::io::{self, BufRead};
+use vecmath::CENTROID_32_LENGTH;
 use vecmath::EMBEDDING_BYTE_LENGTH;
 use vecmath::EMBEDDING_LENGTH;
+use vecmath::QUANTIZED_EMBEDDING_LENGTH;
 
 use rayon::iter::Either;
 use rayon::prelude::*;
@@ -199,6 +207,8 @@ enum Commands {
         promote: bool,
         #[arg(short, long, default_value_t = 1.0)]
         proportion: f32,
+        #[arg(short, long)]
+        quantized: bool,
     },
     ScanNeighbors {
         #[arg(short, long)]
@@ -610,6 +620,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             improve_neighbors,
             promote,
             proportion,
+            quantized,
         } => {
             let dirpath = Path::new(&directory);
             let hnsw_index_path = dbg!(format!(
@@ -618,14 +629,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 create_index_name(&domain, &commit)
             ));
             let store = VectorStore::new(dirpath, size);
-            let mut hnsw: HnswIndex = deserialize_index(&hnsw_index_path, Arc::new(store))
-                .unwrap()
-                .unwrap();
 
             if let Some(threshold) = improve_neighbors {
-                hnsw.improve_neighbors(threshold, proportion);
-                // TODO should write to staging first
-                hnsw.serialize(hnsw_index_path)?;
+                if quantized {
+                    let mut qhnsw: QuantizedHnsw<
+                        EMBEDDING_LENGTH,
+                        CENTROID_32_LENGTH,
+                        QUANTIZED_EMBEDDING_LENGTH,
+                        Centroid32Comparator,
+                        QuantizedComparator,
+                        OpenAIComparator,
+                    > = QuantizedHnsw::deserialize(&hnsw_index_path, Arc::new(store)).unwrap();
+
+                    qhnsw.improve_neighbors(threshold, proportion);
+                    // TODO should write to staging first
+                    qhnsw.serialize(hnsw_index_path)?;
+                } else {
+                    let mut hnsw: HnswIndex = deserialize_index(&hnsw_index_path, Arc::new(store))
+                        .unwrap()
+                        .unwrap();
+
+                    hnsw.improve_neighbors(threshold, proportion);
+                    // TODO should write to staging first
+                    hnsw.serialize(hnsw_index_path)?;
+                }
             } else {
                 todo!();
             }
