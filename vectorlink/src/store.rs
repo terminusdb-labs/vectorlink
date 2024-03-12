@@ -98,45 +98,74 @@ impl<T: Copy> VectorLoader<T> {
 #[allow(unused)]
 pub struct SequentialVectorLoader<T> {
     file: File,
+    chunk_size: usize,
     _x: PhantomData<T>,
 }
 
 #[allow(unused)]
 impl<T> SequentialVectorLoader<T> {
-    pub fn new(file: File) -> Self {
+    pub fn new(file: File, chunk_size: usize) -> Self {
         Self {
             file,
+            chunk_size,
             _x: PhantomData,
         }
     }
 
-    pub fn start<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+    pub fn open<P: AsRef<Path>>(path: P, chunk_size: usize) -> io::Result<Self> {
         let file = OpenOptions::new().read(true).open(path)?;
         let fd = file.as_raw_fd();
         let ret = unsafe { libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL) };
         if ret == 0 {
-            Ok(Self::new(file))
+            Ok(Self::new(file, chunk_size))
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "fadvice failed"))
         }
     }
 
-    pub fn load_chunk(&mut self, len: usize) -> io::Result<Vec<T>> {
-        let mut data: Vec<T> = Vec::with_capacity(len);
+    pub fn load_chunk(&mut self) -> io::Result<Option<Vec<T>>> {
+        let mut data: Vec<T> = Vec::with_capacity(self.chunk_size);
+        let mut bytes_read = 0;
         {
             let buf = data.spare_capacity_mut();
             let bytes_buf = unsafe {
                 std::slice::from_raw_parts_mut(
                     buf.as_ptr() as *mut u8,
-                    len * std::mem::size_of::<T>(),
+                    bytes_read * std::mem::size_of::<T>(),
                 )
             };
-            self.file.read_exact(bytes_buf)?;
+            loop {
+                let count = self.file.read(&mut bytes_buf[bytes_read..])?;
+                bytes_read += count;
+                if count == 0 || bytes_read == buf.len() {
+                    // done reading!
+                    break;
+                }
+            }
         }
-        unsafe {
-            data.set_len(len);
-        }
+        if bytes_read == 0 {
+            Ok(None)
+        } else {
+            // make sure that we read a multiple of T
+            assert!(bytes_read % std::mem::size_of::<T>() == 0);
+            unsafe {
+                data.set_len(bytes_read / std::mem::size_of::<T>());
+            }
 
-        Ok(data)
+            Ok(Some(data))
+        }
+    }
+}
+
+impl<T> Iterator for SequentialVectorLoader<T> {
+    type Item = io::Result<Vec<T>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // The iterator is a simple transformation of load_chunk, switching the option and the result
+        match self.load_chunk() {
+            Ok(None) => None,
+            Ok(Some(v)) => Some(Ok(v)),
+            Err(e) => Some(Err(e)),
+        }
     }
 }

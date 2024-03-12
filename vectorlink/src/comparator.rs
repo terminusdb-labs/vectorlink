@@ -16,10 +16,92 @@ use crate::store::LoadedVectorRange;
 use crate::vecmath::{
     self, Centroid32, QuantizedEmbedding, CENTROID_32_BYTE_LENGTH, QUANTIZED_EMBEDDING_LENGTH,
 };
+use crate::vectors::Domain;
 use crate::{
     vecmath::{normalized_cosine_distance, Embedding},
     vectors::VectorStore,
 };
+
+#[derive(Clone)]
+pub struct DiskOpenAIComparator {
+    domain: Arc<Domain>,
+}
+
+impl DiskOpenAIComparator {
+    pub fn new(domain: Arc<Domain>) -> Self {
+        Self { domain }
+    }
+}
+
+impl Comparator for DiskOpenAIComparator {
+    type T = Embedding;
+    type Borrowable<'a> = Box<Embedding>
+        where Self: 'a;
+    fn lookup(&self, v: VectorId) -> Box<Embedding> {
+        Box::new(self.domain.vec(v.0).unwrap())
+    }
+
+    fn compare_raw(&self, v1: &Embedding, v2: &Embedding) -> f32 {
+        normalized_cosine_distance(v1, v2)
+    }
+}
+
+impl Serializable for DiskOpenAIComparator {
+    type Params = Arc<VectorStore>;
+    fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
+        let mut comparator_file: std::fs::File =
+            OpenOptions::new().write(true).create(true).open(path)?;
+        eprintln!("opened comparator serialize file");
+        // How do we get this value?
+        let comparator = ComparatorMeta {
+            domain_name: self.domain.name().to_owned(),
+            size: self.domain.num_vecs(),
+        };
+        let comparator_meta = serde_json::to_string(&comparator)?;
+        eprintln!("serialized comparator");
+        comparator_file.write_all(&comparator_meta.into_bytes())?;
+        eprintln!("wrote comparator to file");
+        Ok(())
+    }
+
+    fn deserialize<P: AsRef<Path>>(
+        path: P,
+        store: Arc<VectorStore>,
+    ) -> Result<Self, SerializationError> {
+        let mut comparator_file = OpenOptions::new().read(true).open(path)?;
+        let mut contents = String::new();
+        comparator_file.read_to_string(&mut contents)?;
+        let ComparatorMeta { domain_name, .. } = serde_json::from_str(&contents)?;
+        let domain = store.get_domain(&domain_name)?;
+        Ok(DiskOpenAIComparator { domain })
+    }
+}
+
+impl pq::VectorSelector for DiskOpenAIComparator {
+    type T = Embedding;
+
+    fn selection(&self, size: usize) -> Vec<Self::T> {
+        // TODO do something else for sizes close to number of vecs
+        let mut rng = thread_rng();
+        let mut set = HashSet::new();
+        let range = Uniform::from(0_usize..self.domain.num_vecs());
+        while set.len() != size {
+            let candidate = rng.sample(&range);
+            set.insert(candidate);
+        }
+
+        set.into_iter()
+            .map(|index| self.domain.vec(index).unwrap())
+            .collect()
+    }
+
+    fn vector_chunks(&self) -> impl Iterator<Item = Vec<Self::T>> {
+        self.domain
+            .vector_chunks(1_000_000)
+            .unwrap()
+            .map(|x| x.unwrap())
+    }
+}
 
 #[derive(Clone)]
 pub struct OpenAIComparator {

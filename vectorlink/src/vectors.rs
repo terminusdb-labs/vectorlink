@@ -21,7 +21,7 @@ use serde::Serialize;
 use urlencoding::encode;
 
 use crate::comparator::Centroid32Comparator;
-use crate::store::{LoadedVectorRange, VectorLoader};
+use crate::store::{LoadedVectorRange, SequentialVectorLoader, VectorLoader};
 use crate::vecmath::{
     Centroid32, Embedding, EmbeddingBytes, CENTROID_32_LENGTH, EMBEDDING_BYTE_LENGTH,
     EMBEDDING_LENGTH, QUANTIZED_EMBEDDING_LENGTH,
@@ -111,6 +111,13 @@ impl Domain {
 
     pub fn all_vecs(&self) -> io::Result<LoadedVectorRange<Embedding>> {
         self.loader.load_range(0..self.num_vecs())
+    }
+
+    pub fn vector_chunks(
+        &self,
+        chunk_size: usize,
+    ) -> io::Result<SequentialVectorLoader<Embedding>> {
+        SequentialVectorLoader::open(&self.path, chunk_size)
     }
 }
 

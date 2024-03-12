@@ -19,7 +19,9 @@ use tokio_stream::wrappers::LinesStream;
 use urlencoding::encode;
 
 use crate::{
-    comparator::{Centroid32Comparator, OpenAIComparator, QuantizedComparator},
+    comparator::{
+        Centroid32Comparator, DiskOpenAIComparator, OpenAIComparator, QuantizedComparator,
+    },
     indexer::{create_index_name, index_serialization_path},
     openai::{embeddings_for, EmbeddingError, Model},
     server::Operation,
@@ -259,7 +261,7 @@ pub async fn index_using_operations_and_vectors<
             cc: cc.clone(),
             data: Default::default(),
         };
-        let c = comparator;
+        let c = DiskOpenAIComparator::new(domain_obj);
         let hnsw = QuantizedHnsw::new(number_of_vectors, cc, qc, c);
         hnsw.serialize(&staging_file)?;
     } else {
