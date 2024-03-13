@@ -20,6 +20,7 @@ pub enum HnswConfigurationType {
 #[derive(Serialize, Deserialize)]
 pub struct HnswConfigurationState {
     version: usize,
+    #[serde(rename = "type")]
     typ: HnswConfigurationType,
 }
 
