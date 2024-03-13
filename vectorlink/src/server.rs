@@ -46,6 +46,7 @@ use tokio::{io::AsyncBufReadExt, sync::RwLock};
 use tokio_stream::{wrappers::LinesStream, Stream};
 use tokio_util::io::StreamReader;
 
+use crate::configuration::OpenAIHnsw;
 use crate::indexer::create_index_name;
 use crate::indexer::deserialize_index;
 use crate::indexer::index_serialization_path;
@@ -56,7 +57,7 @@ use crate::indexer::IndexError;
 use crate::indexer::Point;
 use crate::indexer::PointOperation;
 use crate::indexer::SearchError;
-use crate::indexer::{start_indexing_from_operations, IndexIdentifier, OpenAI, OpenAIHnsw};
+use crate::indexer::{start_indexing_from_operations, IndexIdentifier, OpenAI};
 use crate::openai::Model;
 use crate::openai::{embeddings_for, EmbeddingError};
 use crate::vectors::VectorStore;

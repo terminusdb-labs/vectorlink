@@ -1,6 +1,7 @@
 #![allow(unused, dead_code)]
 use crate::{
     comparator::OpenAIComparator,
+    configuration::OpenAIHnsw,
     openai::{embeddings_for, EmbeddingError, Model},
     server::Operation,
     vecmath::{self, Embedding},
