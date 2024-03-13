@@ -1,8 +1,8 @@
 use std::{
     fs::{File, OpenOptions},
-    io::{self, Read},
+    io::{self, Read, Seek, SeekFrom, Write},
     marker::PhantomData,
-    ops::Range,
+    ops::{Deref, Range},
     os::{
         fd::AsRawFd,
         unix::fs::{FileExt, OpenOptionsExt},
@@ -168,4 +168,69 @@ impl<T> Iterator for SequentialVectorLoader<T> {
             Err(e) => Some(Err(e)),
         }
     }
+}
+
+pub fn append_vector_range<W: Write + Seek, T: Copy>(mut w: W, vectors: &[T]) -> io::Result<()> {
+    let vector_bytes = unsafe {
+        std::slice::from_raw_parts(
+            vectors.as_ptr() as *const u8,
+            vectors.len() * std::mem::size_of::<T>(),
+        )
+    };
+
+    w.seek(SeekFrom::End(0))?;
+    w.write_all(vector_bytes)?;
+    w.flush()?;
+
+    Ok(())
+}
+
+pub fn append_vectors<W: Write + Seek, T: Copy, DT: Deref<Target = T>, I: Iterator<Item = DT>>(
+    mut w: W,
+    vectors: I,
+) -> io::Result<()> {
+    w.seek(SeekFrom::End(0))?;
+    for vec in vectors {
+        let vector_bytes = unsafe {
+            std::slice::from_raw_parts(&*vec as *const T as *const u8, std::mem::size_of::<T>())
+        };
+
+        w.write_all(vector_bytes)?;
+    }
+    w.flush()?;
+
+    Ok(())
+}
+
+pub struct VectorFile<T> {
+    file: File,
+    _x: PhantomData<T>,
+}
+
+impl<T: Copy> VectorFile<T> {
+    pub fn create<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+        todo!();
+    }
+    pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+        todo!();
+    }
+    pub fn open_create<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+        todo!();
+    }
+
+    pub fn append_vector_range(&mut self, vectors: &[T]) -> io::Result<()> {
+        todo!();
+    }
+    pub fn append_vectors<I: Iterator<Item = T>>(&mut self, vectors: I) -> io::Result<()> {
+        todo!();
+    }
+
+    pub fn vector_range(&self, range: Range<usize>) -> io::Result<LoadedVectorRange<T>> {
+        LoadedVectorRange::load(&self.file, range)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
 }
