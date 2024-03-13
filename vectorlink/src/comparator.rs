@@ -230,7 +230,7 @@ impl Serializable for QuantizedComparator {
 
         let vector_path = path_buf.join("vectors");
 
-        let size = std::fs::metadata(&path)?.size() as usize;
+        let size = std::fs::metadata(&vector_path)?.size() as usize;
         assert_eq!(0, size % std::mem::size_of::<QuantizedEmbedding>());
         let number_of_quantized = size / std::mem::size_of::<QuantizedEmbedding>();
         let mut vec = vec![[0_u16; QUANTIZED_EMBEDDING_LENGTH]; number_of_quantized];
