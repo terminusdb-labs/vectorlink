@@ -5,7 +5,7 @@ use std::{
     ops::{Deref, Range},
     os::{
         fd::AsRawFd,
-        unix::fs::{FileExt, OpenOptionsExt},
+        unix::fs::{FileExt, MetadataExt, OpenOptionsExt},
     },
     path::Path,
 };
@@ -52,26 +52,17 @@ impl<T: Copy> LoadedVectorRange<T> {
     }
 }
 
-pub struct VectorLoader<T> {
-    file: File,
+pub struct VectorLoader<'a, T> {
+    file: &'a File,
     _x: PhantomData<T>,
 }
 
-impl<T: Copy> VectorLoader<T> {
-    pub fn new(file: File) -> Self {
+impl<'a, T: Copy> VectorLoader<'a, T> {
+    pub fn new(file: &'a File) -> Self {
         Self {
             file,
             _x: PhantomData,
         }
-    }
-
-    pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECT)
-            .open(path)?;
-
-        Ok(Self::new(file))
     }
 
     pub fn load_range(&self, range: Range<usize>) -> io::Result<LoadedVectorRange<T>> {
@@ -99,15 +90,28 @@ impl<T: Copy> VectorLoader<T> {
 pub struct SequentialVectorLoader<T> {
     file: File,
     chunk_size: usize,
+    upto: usize,
     _x: PhantomData<T>,
+}
+
+pub fn n_bytes_to_n_vecs<T>(n_bytes: usize) -> usize {
+    assert!(n_bytes % std::mem::size_of::<T>() == 0);
+    n_bytes / std::mem::size_of::<T>()
 }
 
 #[allow(unused)]
 impl<T> SequentialVectorLoader<T> {
-    pub fn new(file: File, chunk_size: usize) -> Self {
+    pub fn new(file: File, chunk_size: usize) -> io::Result<Self> {
+        let n_bytes = file.metadata()?.size();
+        let n_vecs = n_bytes_to_n_vecs::<T>(n_bytes as usize);
+        Ok(Self::new_upto(file, chunk_size, n_vecs + 1))
+    }
+
+    pub fn new_upto(file: File, chunk_size: usize, upto: usize) -> Self {
         Self {
             file,
             chunk_size,
+            upto,
             _x: PhantomData,
         }
     }
@@ -117,7 +121,7 @@ impl<T> SequentialVectorLoader<T> {
         let fd = file.as_raw_fd();
         let ret = unsafe { libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL) };
         if ret == 0 {
-            Ok(Self::new(file, chunk_size))
+            Ok(Self::new(file, chunk_size)?)
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "fadvice failed"))
         }

@@ -7,7 +7,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Seek, SeekFrom, Write};
 use std::mem::MaybeUninit;
 use std::ops::{Deref, Range};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::prelude::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{self, AtomicUsize};
@@ -32,7 +32,7 @@ pub struct Domain {
     name: Arc<String>,
     index: usize,
     path: PathBuf,
-    loader: VectorLoader<Embedding>,
+    file: File,
     num_vecs: AtomicUsize,
     write_lock: Mutex<()>,
 }
@@ -48,10 +48,15 @@ impl Domain {
         path.push(format!("{encoded_name}.vecs"));
         let end = std::fs::metadata(&path)?.size();
         let num_vecs = AtomicUsize::new(end as usize / EMBEDDING_BYTE_LENGTH);
+        // todo: shouldn't we be creating this file if it is not there?
+        let file = OpenOptions::new()
+            .custom_flags(libc::O_DIRECT)
+            .read(true)
+            .open(&path)?;
 
         Ok(Domain {
             name: Arc::new(name.to_string()),
-            loader: VectorLoader::open(&path)?,
+            file,
             index,
             path,
             num_vecs,
@@ -101,16 +106,20 @@ impl Domain {
         self.num_vecs.load(atomic::Ordering::Relaxed)
     }
 
+    pub fn loader<'a>(&'a self) -> VectorLoader<'a, Embedding> {
+        VectorLoader::new(&self.file)
+    }
+
     pub fn vec(&self, id: usize) -> io::Result<Embedding> {
-        self.loader.vec(id)
+        self.loader().vec(id)
     }
 
     pub fn vec_range(&self, range: Range<usize>) -> io::Result<LoadedVectorRange<Embedding>> {
-        self.loader.load_range(range)
+        self.loader().load_range(range)
     }
 
     pub fn all_vecs(&self) -> io::Result<LoadedVectorRange<Embedding>> {
-        self.loader.load_range(0..self.num_vecs())
+        self.loader().load_range(0..self.num_vecs())
     }
 
     pub fn vector_chunks(
