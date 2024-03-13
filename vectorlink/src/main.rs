@@ -22,10 +22,11 @@ use clap::{Parser, Subcommand, ValueEnum};
 use comparator::Centroid32Comparator;
 use comparator::OpenAIComparator;
 use comparator::QuantizedComparator;
+use configuration::HnswConfiguration;
 //use hnsw::Hnsw;
+use indexer::index_serialization_path;
 use indexer::start_indexing_from_operations;
 use indexer::Point;
-use indexer::{index_serialization_path, serialize_index};
 use indexer::{operations_to_point_operations, OpenAI};
 use itertools::Itertools;
 use openai::Model;
@@ -40,6 +41,7 @@ use server::Operation;
 use space::Metric;
 use std::fs::File;
 use std::io::{self, BufRead};
+use vecmath::Embedding;
 use vecmath::CENTROID_32_LENGTH;
 use vecmath::EMBEDDING_BYTE_LENGTH;
 use vecmath::EMBEDDING_LENGTH;
@@ -48,13 +50,9 @@ use vecmath::QUANTIZED_EMBEDDING_LENGTH;
 use rayon::iter::Either;
 use rayon::prelude::*;
 
-use crate::indexer::deserialize_index;
+use crate::configuration::OpenAIHnsw;
 
-use {
-    indexer::{create_index_name, OpenAIHnsw},
-    vecmath::empty_embedding,
-    vectors::VectorStore,
-};
+use {indexer::create_index_name, vecmath::empty_embedding, vectors::VectorStore};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -161,18 +159,6 @@ enum Commands {
         #[arg(short, long, default_value_t = 10000)]
         size: usize,
     },
-    Diagnostics {
-        #[arg(short, long)]
-        commit: String,
-        #[arg(long)]
-        domain: String,
-        #[arg(short, long)]
-        directory: String,
-        #[arg(short, long, default_value_t = 10000)]
-        size: usize,
-        #[arg(short, long, default_value_t = 0)]
-        layer: usize,
-    },
     Duplicates {
         #[arg(short, long)]
         commit: String,
@@ -208,8 +194,6 @@ enum Commands {
         promote: bool,
         #[arg(short, long, default_value_t = 1.0)]
         proportion: f32,
-        #[arg(short, long)]
-        quantized: bool,
     },
     ScanNeighbors {
         #[arg(short, long)]
@@ -252,6 +236,57 @@ fn content_endpoint_or_env(c: Option<String>) -> Option<String> {
 
 fn user_forward_header_or_env(c: Option<String>) -> String {
     c.unwrap_or_else(|| std::env::var("TERMINUSDB_USER_FORWARD_HEADER").unwrap())
+}
+
+impl HnswConfiguration {
+    fn vector_count(&self) -> usize {
+        match self {
+            HnswConfiguration::QuantizedOpenAI(q) => q.vector_count(),
+            HnswConfiguration::UnquantizedOpenAi(h) => h.vector_count(),
+        }
+    }
+    pub fn search(
+        &self,
+        v: AbstractVector<Embedding>,
+        number_of_candidates: usize,
+        probe_depth: usize,
+    ) -> Vec<(VectorId, f32)> {
+        match self {
+            HnswConfiguration::QuantizedOpenAI(q) => q.search(v, number_of_candidates, probe_depth),
+            HnswConfiguration::UnquantizedOpenAi(h) => {
+                h.search(v, number_of_candidates, probe_depth)
+            }
+        }
+    }
+
+    pub fn improve_neighbors(&mut self, threshold: f32, recall: f32) {
+        match self {
+            HnswConfiguration::QuantizedOpenAI(q) => q.improve_neighbors(threshold, recall),
+            HnswConfiguration::UnquantizedOpenAi(h) => h.improve_neighbors(threshold, recall),
+        }
+    }
+
+    pub fn zero_neighborhood_size(&self) -> usize {
+        match self {
+            HnswConfiguration::QuantizedOpenAI(q) => q.zero_neighborhood_size(),
+            HnswConfiguration::UnquantizedOpenAi(h) => h.zero_neighborhood_size(),
+        }
+    }
+    pub fn threshold_nn(
+        &self,
+        threshold: f32,
+        probe_depth: usize,
+        initial_search_depth: usize,
+    ) -> impl IndexedParallelIterator<Item = (VectorId, Vec<(VectorId, f32)>)> + '_ {
+        match self {
+            HnswConfiguration::QuantizedOpenAI(q) => {
+                Either::Left(q.threshold_nn(threshold, probe_depth, initial_search_depth))
+            }
+            HnswConfiguration::UnquantizedOpenAi(h) => {
+                Either::Right(h.threshold_nn(threshold, probe_depth, initial_search_depth))
+            }
+        }
+    }
 }
 
 #[tokio::main]
@@ -436,9 +471,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 create_index_name(&domain, &commit)
             ));
             let store = VectorStore::new(dirpath, size);
-            let hnsw: OpenAIHnsw = deserialize_index(hnsw_index_path, Arc::new(store))
-                .unwrap()
-                .unwrap();
+            let hnsw = HnswConfiguration::deserialize(hnsw_index_path, Arc::new(store)).unwrap();
             let mut rng = thread_rng();
             let num = hnsw.vector_count();
             let max = (0.001 * num as f32) as usize;
@@ -466,111 +499,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let recall = relevant as f32 / max as f32;
             eprintln!("Recall: {recall}");
         }
-        Commands::Diagnostics {
-            domain,
-            directory,
-            size,
-            commit,
-            layer,
-        } => {
-            let dirpath = Path::new(&directory);
-            let hnsw_index_path = dbg!(format!(
-                "{}/{}.hnsw",
-                directory,
-                create_index_name(&domain, &commit)
-            ));
-            let store = VectorStore::new(dirpath, size);
-            let hnsw: OpenAIHnsw = deserialize_index(hnsw_index_path, Arc::new(store))
-                .unwrap()
-                .unwrap();
-
-            let bottom_distances: Vec<NodeDistance> =
-                hnsw.node_distances_for_layer(hnsw.layer_count() - 1 - layer);
-
-            let mut bottom_distances: Vec<(NodeId, usize)> = bottom_distances
-                .into_iter()
-                .enumerate()
-                .map(|(ix, d)| (NodeId(ix), d.index_sum))
-                .collect();
-
-            bottom_distances.sort_by_key(|(_, d)| usize::MAX - d);
-
-            let unreachables: Vec<NodeId> = bottom_distances
-                .iter()
-                .take_while(|(_, d)| *d == !0)
-                .map(|(n, _)| *n)
-                .collect();
-
-            eprintln!("unreachables: {}", unreachables.len());
-
-            let mean = bottom_distances
-                .iter()
-                .skip(unreachables.len())
-                .map(|(_, d)| d)
-                .sum::<usize>() as f32
-                / (bottom_distances.len() - unreachables.len()) as f32;
-            eprintln!("mean: {mean}");
-
-            let variance = bottom_distances
-                .iter()
-                .skip(unreachables.len())
-                .map(|(_, d)| {
-                    let d = *d as f32;
-                    let diff = if d > mean { d - mean } else { mean - d };
-                    diff * diff
-                })
-                .sum::<f32>()
-                / (bottom_distances.len() - unreachables.len()) as f32;
-
-            eprintln!("variance: {variance}");
-
-            for x in bottom_distances.iter().skip(unreachables.len()).take(250) {
-                eprintln!(" {} has distance {}", x.0 .0, x.1);
-            }
-
-            let mut clusters: Vec<(NodeId, Vec<(NodeId, usize)>)> = unreachables
-                .par_iter()
-                .map(|node| {
-                    (
-                        *node,
-                        hnsw.reachables_from_node_for_layer(
-                            hnsw.layer_count() - 1 - layer,
-                            *node,
-                            &unreachables[..],
-                        ),
-                    )
-                })
-                .collect();
-
-            clusters.sort_by_key(|c| usize::MAX - c.1.len());
-
-            for x in clusters.iter().take(250) {
-                eprintln!(
-                    " from {} we reach {} previously unreachables",
-                    x.0 .0,
-                    x.1.len()
-                );
-            }
-
-            // take first from unreachables
-            // figure out its neighbors and if they are also unreachables
-            let mut cluster_queue: Vec<_> = clusters.iter().map(Some).collect();
-            cluster_queue.reverse();
-            let mut nodes_to_promote: Vec<NodeId> = Vec::new();
-            while let Some(next) = cluster_queue.pop() {
-                if let Some((nodeid, _)) = next {
-                    nodes_to_promote.push(*nodeid);
-                    for other in cluster_queue.iter_mut() {
-                        if let Some((_, other_distances)) = other {
-                            if other_distances.iter().any(|(n, _)| nodeid == n) {
-                                *other = None
-                            }
-                        }
-                    }
-                }
-            }
-            eprintln!("Nodes to promote: {nodes_to_promote:?}");
-        }
         Commands::Duplicates {
             commit,
             domain,
@@ -586,9 +514,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 create_index_name(&domain, &commit)
             ));
             let store = VectorStore::new(dirpath, size);
-            let hnsw: OpenAIHnsw = deserialize_index(hnsw_index_path, Arc::new(store))
-                .unwrap()
-                .unwrap();
+            let hnsw = HnswConfiguration::deserialize(hnsw_index_path, Arc::new(store)).unwrap();
 
             let initial_search_depth = 3 * hnsw.zero_neighborhood_size();
             let elts = if let Some(take) = take {
@@ -621,7 +547,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             improve_neighbors,
             promote,
             proportion,
-            quantized,
         } => {
             let dirpath = Path::new(&directory);
             let hnsw_index_path = dbg!(format!(
@@ -632,28 +557,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let store = VectorStore::new(dirpath, size);
 
             if let Some(threshold) = improve_neighbors {
-                if quantized {
-                    let mut qhnsw: QuantizedHnsw<
-                        EMBEDDING_LENGTH,
-                        CENTROID_32_LENGTH,
-                        QUANTIZED_EMBEDDING_LENGTH,
-                        Centroid32Comparator,
-                        QuantizedComparator,
-                        OpenAIComparator,
-                    > = QuantizedHnsw::deserialize(&hnsw_index_path, Arc::new(store)).unwrap();
+                let mut hnsw: HnswConfiguration =
+                    HnswConfiguration::deserialize(&hnsw_index_path, Arc::new(store)).unwrap();
 
-                    qhnsw.improve_neighbors(threshold, proportion);
-                    // TODO should write to staging first
-                    qhnsw.serialize(hnsw_index_path)?;
-                } else {
-                    let mut hnsw: OpenAIHnsw = deserialize_index(&hnsw_index_path, Arc::new(store))
-                        .unwrap()
-                        .unwrap();
+                hnsw.improve_neighbors(threshold, proportion);
 
-                    hnsw.improve_neighbors(threshold, proportion);
-                    // TODO should write to staging first
-                    hnsw.serialize(hnsw_index_path)?;
-                }
+                // TODO should write to staging first
+                hnsw.serialize(hnsw_index_path)?;
             } else {
                 todo!();
             }
@@ -673,9 +583,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 create_index_name(&domain, &commit)
             ));
             let store = VectorStore::new(dirpath, size);
-            let hnsw: OpenAIHnsw = deserialize_index(&hnsw_index_path, Arc::new(store))
-                .unwrap()
-                .unwrap();
+            let hnsw = HnswConfiguration::deserialize(&hnsw_index_path, Arc::new(store)).unwrap();
 
             let mut sequence_path = PathBuf::from(directory);
             sequence_path.push(format!("{sequence_domain}.vecs"));

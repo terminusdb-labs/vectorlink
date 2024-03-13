@@ -231,13 +231,6 @@ pub fn index_serialization_path<P: AsRef<Path>>(path: P, name: &str) -> PathBuf 
     path
 }
 
-pub fn serialize_index<P: AsRef<Path>>(
-    filename: P,
-    hnsw: &OpenAIHnsw,
-) -> Result<(), SerializationError> {
-    hnsw.serialize(filename)
-}
-
 pub fn create_index_name(domain: &str, commit: &str) -> String {
     let domain = encode(domain);
     format!("{}@{}", domain, commit)
@@ -247,13 +240,6 @@ pub fn parse_index_name(name: &str) -> (String, String) {
     let (domain, commit) = name.split_once('@').unwrap();
     let domain = decode(domain).unwrap();
     (domain.to_string(), commit.to_string())
-}
-
-pub fn deserialize_index<P: AsRef<Path>>(
-    path: P,
-    vs: Arc<VectorStore>,
-) -> Result<Option<OpenAIHnsw>, SerializationError> {
-    Hnsw::deserialize(path, vs)
 }
 
 #[cfg(test)]

@@ -20,10 +20,7 @@ use urlencoding::encode;
 
 use crate::{
     comparator::{Centroid32Comparator, OpenAIComparator, QuantizedComparator},
-    indexer::{
-        create_index_name, deserialize_index, index_serialization_path, serialize_index, OpenAI,
-        OpenAIHnsw, Point,
-    },
+    indexer::{create_index_name, index_serialization_path, OpenAI, Point},
     openai::{embeddings_for, EmbeddingError, Model},
     server::Operation,
     vecmath::{Embedding, QUANTIZED_EMBEDDING_LENGTH},

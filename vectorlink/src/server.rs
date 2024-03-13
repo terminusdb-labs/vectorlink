@@ -48,11 +48,9 @@ use tokio_util::io::StreamReader;
 
 use crate::configuration::OpenAIHnsw;
 use crate::indexer::create_index_name;
-use crate::indexer::deserialize_index;
 use crate::indexer::index_serialization_path;
 use crate::indexer::operations_to_point_operations;
 use crate::indexer::search;
-use crate::indexer::serialize_index;
 use crate::indexer::IndexError;
 use crate::indexer::Point;
 use crate::indexer::PointOperation;
@@ -418,8 +416,6 @@ enum ResponseError {
     IdMissing(String),
     #[error("Embedding error: {0:?}")]
     EmbeddingError(#[from] EmbeddingError),
-    #[error("index not found")]
-    IndexNotFound,
     #[error("source commit not found")]
     SourceCommitNotFound,
     #[error("target commit already has an index")]
@@ -454,10 +450,10 @@ impl Service {
             let mut path = self.path.clone();
             let domain = self.vector_store.get_domain(index_id)?;
             let index_path = index_serialization_path(path, index_id);
-            match deserialize_index(index_path, self.vector_store.clone())? {
-                Some(hnsw) => Ok(hnsw.into()),
-                None => Err(ResponseError::IndexNotFound),
-            }
+            Ok(Arc::new(OpenAIHnsw::deserialize(
+                index_path,
+                self.vector_store.clone(),
+            )?))
         }
     }
 
@@ -530,7 +526,9 @@ impl Service {
             let previous_id = create_index_name(&domain, &previous_id);
             self.get_index(&previous_id).await
         } else {
-            Err(ResponseError::IndexNotFound)
+            Err(ResponseError::SerializationError(
+                SerializationError::IndexNotFound,
+            ))
         }
     }
 
@@ -657,7 +655,7 @@ impl Service {
         std::mem::drop(indexes);
         tokio::task::block_in_place(move || {
             let file_name = index_serialization_path(&self.path, &target_name);
-            serialize_index(file_name, &index).unwrap();
+            index.serialize(file_name).unwrap();
         });
         Ok(())
     }
@@ -743,7 +741,7 @@ impl Service {
         )
         .await;
         let file_name = index_serialization_path(&self.path, index_id);
-        serialize_index(file_name, &hnsw)?;
+        hnsw.serialize(file_name)?;
         Ok((id, hnsw))
     }
 
