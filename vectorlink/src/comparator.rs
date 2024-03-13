@@ -91,7 +91,7 @@ struct MemoizedDistances32 {
 impl MemoizedDistances32 {
     fn new(vectors: &[Centroid32]) -> Self {
         let size = vectors.len();
-        let mut distances: Vec<f32> = Vec::with_capacity(size * size);
+        let mut distances: Vec<f32> = vec![0.0; size * size];
         for c in 0..size * size {
             let i = c / size;
             let j = c % size;
