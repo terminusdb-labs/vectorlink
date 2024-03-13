@@ -82,8 +82,33 @@ impl Serializable for OpenAIComparator {
     }
 }
 
+#[derive(Default)]
+struct MemoizedDistances32 {
+    distances: Vec<f32>,
+    size: usize,
+}
+
+impl MemoizedDistances32 {
+    fn new(vectors: &[Centroid32]) -> Self {
+        let size = vectors.len();
+        let mut distances: Vec<f32> = Vec::with_capacity(size * size);
+        for c in 0..size * size {
+            let i = c / size;
+            let j = c % size;
+            distances[c] = vecmath::euclidean_distance_32(&vectors[i], &vectors[j]);
+        }
+
+        Self { distances, size }
+    }
+
+    fn distance(&self, i: usize, j: usize) -> f32 {
+        self.distances[i * self.size + j]
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Centroid32Comparator {
+    distances: Arc<RwLock<MemoizedDistances32>>,
     centroids: Arc<RwLock<Vec<Centroid32>>>,
 }
 
@@ -96,6 +121,21 @@ impl Comparator for Centroid32Comparator {
         ReadLockedVec {
             lock: self.centroids.read().unwrap(),
             id: v,
+        }
+    }
+
+    fn compare_vec(&self, v1: AbstractVector<Self::T>, v2: AbstractVector<Self::T>) -> f32 {
+        match (v1, v2) {
+            (AbstractVector::Stored(v1), AbstractVector::Stored(v2)) => {
+                let d = self.distances.read().unwrap();
+                let c = self.centroids.read().unwrap();
+                let i = v1.0;
+                let j = v2.0;
+                d.distance(i, j)
+            }
+            (AbstractVector::Stored(_), AbstractVector::Unstored(_)) => todo!(),
+            (AbstractVector::Unstored(_), AbstractVector::Stored(_)) => todo!(),
+            (AbstractVector::Unstored(_), AbstractVector::Unstored(_)) => todo!(),
         }
     }
 
@@ -133,6 +173,7 @@ impl Serializable for Centroid32Comparator {
         file.read_exact(buf)?;
 
         Ok(Self {
+            distances: Arc::new(RwLock::new(MemoizedDistances32::new(&vec))),
             centroids: Arc::new(RwLock::new(vec)),
         })
     }
@@ -149,6 +190,9 @@ impl parallel_hnsw::pq::VectorStore for Centroid32Comparator {
             vectors.push(VectorId(vid + i));
             v
         }));
+        let distances = MemoizedDistances32::new(&data);
+        let mut dist = self.distances.write().unwrap();
+        *dist = distances;
         vectors
     }
 }
