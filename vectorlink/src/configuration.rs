@@ -82,8 +82,8 @@ impl Serializable for HnswConfiguration {
     ) -> Result<Self, parallel_hnsw::SerializationError> {
         let mut state_path: PathBuf = path.as_ref().join("state.json");
         let mut state_file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
+            .create(false)
+            .read(true)
             .open(state_path)?;
 
         let state: HnswConfigurationState = serde_json::from_reader(&mut state_file)?;
