@@ -212,14 +212,36 @@ pub struct VectorFile<T> {
 }
 
 impl<T: Copy> VectorFile<T> {
-    pub fn create<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        todo!();
+    pub fn new(file: File) -> Self {
+        Self {
+            file,
+            _x: PhantomData,
+        }
     }
-    pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        todo!();
+    pub fn create<P: AsRef<Path>>(path: P, os_cached: bool) -> io::Result<Self> {
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        if !os_cached {
+            options.custom_flags(libc::O_DIRECT);
+        }
+        let file = options.open(&path)?;
+        Ok(Self::new(file))
     }
-    pub fn open_create<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        todo!();
+    pub fn open<P: AsRef<Path>>(path: P, os_cached: bool) -> io::Result<Self> {
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(false);
+        if !os_cached {
+            options.custom_flags(libc::O_DIRECT);
+        }
+        let file = options.open(&path)?;
+        Ok(Self::new(file))
+    }
+    pub fn open_create<P: AsRef<Path>>(path: P, os_cached: bool) -> io::Result<Self> {
+        if path.as_ref().exists() {
+            Self::open(path, os_cached)
+        } else {
+            Self::create(path, os_cached)
+        }
     }
 
     pub fn append_vector_range(&mut self, vectors: &[T]) -> io::Result<()> {
