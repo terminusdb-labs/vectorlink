@@ -30,8 +30,10 @@ use indexer::Point;
 use indexer::{operations_to_point_operations, OpenAI};
 use itertools::Itertools;
 use openai::Model;
-use parallel_hnsw::pq::HnswQuantizer;
 use parallel_hnsw::pq::QuantizedHnsw;
+use parallel_hnsw::pq::VectorSelector;
+use parallel_hnsw::pq::{HnswQuantizer, Quantizer};
+use parallel_hnsw::Comparator;
 use parallel_hnsw::Serializable;
 use parallel_hnsw::{AbstractVector, AllVectorIterator, Hnsw, NodeDistance, NodeId, VectorId};
 use rand::thread_rng;
@@ -42,6 +44,7 @@ use space::Metric;
 use std::fs::File;
 use std::io::{self, BufRead};
 use vecmath::Embedding;
+use vecmath::QuantizedEmbedding;
 use vecmath::CENTROID_32_LENGTH;
 use vecmath::EMBEDDING_BYTE_LENGTH;
 use vecmath::EMBEDDING_LENGTH;
@@ -208,6 +211,16 @@ enum Commands {
         size: usize,
         #[arg(short, long, default_value_t = 1.0_f32)]
         threshold: f32,
+    },
+    TestQuantization {
+        #[arg(short, long)]
+        directory: String,
+        #[arg(short, long)]
+        commit: String,
+        #[arg(long)]
+        domain: String,
+        #[arg(short, long, default_value_t = 10000)]
+        size: usize,
     },
 }
 
@@ -619,6 +632,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         panic!("error occured while processing sequence vector file: {}", e);
                     }
                 }
+            }
+        }
+        Commands::TestQuantization {
+            commit,
+            domain,
+            directory,
+            size,
+        } => {
+            let dirpath = Path::new(&directory);
+            let hnsw_index_path = dbg!(format!(
+                "{}/{}.hnsw",
+                directory,
+                create_index_name(&domain, &commit)
+            ));
+            let store = VectorStore::new(dirpath, size);
+            let hnsw = HnswConfiguration::deserialize(&hnsw_index_path, Arc::new(store)).unwrap();
+            if let HnswConfiguration::QuantizedOpenAI(hnsw) = hnsw {
+                let c = hnsw.quantized_comparator();
+                let quantized_vecs = c.data.read().unwrap();
+                let mut cursor: &[QuantizedEmbedding] = &quantized_vecs;
+                let quantizer = hnsw.quantizer();
+                // sample_avg = sum(errors)/|errors|
+                // sample_var = sum((error - sample_avg)^2)/|errors|
+
+                let fc = hnsw.full_comparator();
+
+                let mut errors = vec![0.0_f32; hnsw.vector_count()];
+
+                let mut offset = 0;
+                for chunk in fc.vector_chunks() {
+                    let len = chunk.len();
+                    let quantized_chunk = &cursor[..len];
+                    cursor = &cursor[len..];
+
+                    chunk
+                        .into_par_iter()
+                        .zip(quantized_chunk.into_par_iter())
+                        .map(|(full_vec, quantized_vec)| {
+                            let reconstructed = quantizer.reconstruct(&quantized_vec);
+
+                            fc.compare_raw(&full_vec, &reconstructed)
+                        })
+                        .enumerate()
+                        .for_each(|(ix, distance)| unsafe {
+                            let ptr = errors.as_ptr().offset((offset + ix) as isize) as *mut f32;
+                            *ptr = distance;
+                        });
+
+                    offset += len;
+                }
+
+                let sample_avg: f32 = errors.iter().sum::<f32>() / errors.len() as f32;
+                let sample_var = errors
+                    .iter()
+                    .map(|e| (e - sample_avg))
+                    .map(|x| x * x)
+                    .sum::<f32>()
+                    / errors.len() as f32;
+                let sample_deviation = sample_var.sqrt();
+
+                eprintln!("sample avg: {sample_avg}\nsample var: {sample_var}\nsample deviation: {sample_deviation}");
+            } else {
+                panic!("not a pq hnsw index");
             }
         }
     }
