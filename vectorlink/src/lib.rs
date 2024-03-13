@@ -1,6 +1,7 @@
 #![feature(portable_simd)]
 
 pub mod comparator;
+pub mod configuration;
 pub mod indexer;
 
 pub mod openai;

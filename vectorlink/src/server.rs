@@ -56,7 +56,7 @@ use crate::indexer::IndexError;
 use crate::indexer::Point;
 use crate::indexer::PointOperation;
 use crate::indexer::SearchError;
-use crate::indexer::{start_indexing_from_operations, HnswIndex, IndexIdentifier, OpenAI};
+use crate::indexer::{start_indexing_from_operations, IndexIdentifier, OpenAI, OpenAIHnsw};
 use crate::openai::Model;
 use crate::openai::{embeddings_for, EmbeddingError};
 use crate::vectors::VectorStore;
@@ -333,7 +333,7 @@ pub struct Service {
     vector_store: Arc<VectorStore>,
     pending: Mutex<HashSet<String>>,
     tasks: RwLock<HashMap<String, TaskStatus>>,
-    indexes: RwLock<HashMap<String, Arc<HnswIndex>>>,
+    indexes: RwLock<HashMap<String, Arc<OpenAIHnsw>>>,
 }
 
 #[derive(Debug, Error)]
@@ -446,7 +446,7 @@ impl Service {
         self.tasks.write().await.insert(task_id, status);
     }
 
-    async fn get_index(&self, index_id: &str) -> Result<Arc<HnswIndex>, ResponseError> {
+    async fn get_index(&self, index_id: &str) -> Result<Arc<OpenAIHnsw>, ResponseError> {
         if let Some(hnsw) = self.indexes.read().await.get(index_id) {
             Ok(hnsw.clone())
         } else {
@@ -460,7 +460,7 @@ impl Service {
         }
     }
 
-    async fn set_index(&self, index_id: String, hnsw: Arc<HnswIndex>) {
+    async fn set_index(&self, index_id: String, hnsw: Arc<OpenAIHnsw>) {
         self.indexes.write().await.insert(index_id, hnsw);
     }
 
@@ -522,7 +522,7 @@ impl Service {
     async fn load_hnsw_for_indexing(
         &self,
         idxid: IndexIdentifier,
-    ) -> Result<Arc<HnswIndex>, ResponseError> {
+    ) -> Result<Arc<OpenAIHnsw>, ResponseError> {
         if let Some(previous_id) = idxid.previous {
             //let commit = idxid.commit;
             let domain = idxid.domain;
@@ -543,7 +543,7 @@ impl Service {
         model: Model,
         index_id: &str,
         content_endpoint: String,
-    ) -> Result<(String, Arc<HnswIndex>), ResponseError> {
+    ) -> Result<(String, Arc<OpenAIHnsw>), ResponseError> {
         let internal_task_id = task_id;
         let opstream = get_operations_from_content_endpoint(
             content_endpoint.to_string(),
@@ -674,7 +674,7 @@ impl Service {
         task_id: &str,
         api_key: &str,
         model: Model,
-    ) -> Result<(String, Arc<HnswIndex>), ResponseError> {
+    ) -> Result<(String, Arc<OpenAIHnsw>), ResponseError> {
         let id = create_index_name(&domain, &commit);
         let mut hnsw = self
             .load_hnsw_for_indexing(IndexIdentifier {

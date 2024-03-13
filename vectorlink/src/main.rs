@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 mod batch;
 mod comparator;
+mod configuration;
 mod indexer;
 mod openai;
 mod server;
@@ -50,7 +51,7 @@ use rayon::prelude::*;
 use crate::indexer::deserialize_index;
 
 use {
-    indexer::{create_index_name, HnswIndex},
+    indexer::{create_index_name, OpenAIHnsw},
     vecmath::empty_embedding,
     vectors::VectorStore,
 };
@@ -435,7 +436,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 create_index_name(&domain, &commit)
             ));
             let store = VectorStore::new(dirpath, size);
-            let hnsw: HnswIndex = deserialize_index(hnsw_index_path, Arc::new(store))
+            let hnsw: OpenAIHnsw = deserialize_index(hnsw_index_path, Arc::new(store))
                 .unwrap()
                 .unwrap();
             let mut rng = thread_rng();
@@ -479,7 +480,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 create_index_name(&domain, &commit)
             ));
             let store = VectorStore::new(dirpath, size);
-            let hnsw: HnswIndex = deserialize_index(hnsw_index_path, Arc::new(store))
+            let hnsw: OpenAIHnsw = deserialize_index(hnsw_index_path, Arc::new(store))
                 .unwrap()
                 .unwrap();
 
@@ -585,7 +586,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 create_index_name(&domain, &commit)
             ));
             let store = VectorStore::new(dirpath, size);
-            let hnsw: HnswIndex = deserialize_index(hnsw_index_path, Arc::new(store))
+            let hnsw: OpenAIHnsw = deserialize_index(hnsw_index_path, Arc::new(store))
                 .unwrap()
                 .unwrap();
 
@@ -645,7 +646,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     // TODO should write to staging first
                     qhnsw.serialize(hnsw_index_path)?;
                 } else {
-                    let mut hnsw: HnswIndex = deserialize_index(&hnsw_index_path, Arc::new(store))
+                    let mut hnsw: OpenAIHnsw = deserialize_index(&hnsw_index_path, Arc::new(store))
                         .unwrap()
                         .unwrap();
 
@@ -672,7 +673,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 create_index_name(&domain, &commit)
             ));
             let store = VectorStore::new(dirpath, size);
-            let hnsw: HnswIndex = deserialize_index(&hnsw_index_path, Arc::new(store))
+            let hnsw: OpenAIHnsw = deserialize_index(&hnsw_index_path, Arc::new(store))
                 .unwrap()
                 .unwrap();
 

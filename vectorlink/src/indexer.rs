@@ -20,7 +20,6 @@ use thiserror::Error;
 use tokio::task::JoinError;
 use urlencoding::{decode, encode};
 
-pub type HnswIndex = Hnsw<OpenAIComparator>;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -169,9 +168,9 @@ pub enum IndexError {
 }
 
 pub fn start_indexing_from_operations(
-    hnsw: Arc<HnswIndex>,
+    hnsw: Arc<OpenAIHnsw>,
     operations: Vec<PointOperation>,
-) -> Result<Arc<HnswIndex>, io::Error> {
+) -> Result<Arc<OpenAIHnsw>, io::Error> {
     todo!()
     /*
     let mut searcher = Searcher::default();
@@ -212,7 +211,7 @@ impl PointQuery {
     }
 }
 
-pub fn search(p: &Point, mut num: usize, hnsw: &HnswIndex) -> Vec<PointQuery> {
+pub fn search(p: &Point, mut num: usize, hnsw: &OpenAIHnsw) -> Vec<PointQuery> {
     let ef = num.max(100);
     let output = hnsw.search(p.abstract_vector(), ef, 2);
     let points = output
@@ -233,7 +232,7 @@ pub fn index_serialization_path<P: AsRef<Path>>(path: P, name: &str) -> PathBuf 
 
 pub fn serialize_index<P: AsRef<Path>>(
     filename: P,
-    hnsw: &HnswIndex,
+    hnsw: &OpenAIHnsw,
 ) -> Result<(), SerializationError> {
     hnsw.serialize(filename)
 }
@@ -252,7 +251,7 @@ pub fn parse_index_name(name: &str) -> (String, String) {
 pub fn deserialize_index<P: AsRef<Path>>(
     path: P,
     vs: Arc<VectorStore>,
-) -> Result<Option<HnswIndex>, SerializationError> {
+) -> Result<Option<OpenAIHnsw>, SerializationError> {
     Hnsw::deserialize(path, vs)
 }
 
