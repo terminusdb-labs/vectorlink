@@ -67,7 +67,7 @@ impl Serializable for HnswConfiguration {
         }
         let state_path: PathBuf = path.as_ref().join("state.json");
         let mut state_file = OpenOptions::new()
-            .create_new(true)
+            .create(true)
             .write(true)
             .open(state_path)?;
         serde_json::to_writer(&mut state_file, &self.state())?;
