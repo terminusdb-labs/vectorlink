@@ -111,6 +111,10 @@ pub fn normalize_vec(vec: &mut Embedding) {
     simd::normalize_vec_simd(vec)
 }
 
+pub fn sum_48(vec: &[f32; 48]) -> f32 {
+    simd::sum_48(vec)
+}
+
 pub mod simd {
     use super::*;
     use aligned_box::AlignedBox;
@@ -187,6 +191,14 @@ pub mod simd {
             let array = scaled.to_array();
             subvecs.copy_from_slice(array.as_ref());
         }
+    }
+
+    pub fn sum_48(array: &[f32; 48]) -> f32 {
+        let mut sum = <f32x16>::from_slice(&array[..16]);
+        sum += <f32x16>::from_slice(&array[16..32]);
+        sum += <f32x16>::from_slice(&array[32..48]);
+
+        sum.reduce_sum()
     }
 }
 

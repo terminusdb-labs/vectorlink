@@ -103,6 +103,10 @@ impl MemoizedPartialDistances32 {
         }
     }
 
+    fn all_distances(&self) -> &[f32] {
+        &self.partial_distances
+    }
+
     fn partial_distance(&self, i: u16, j: u16) -> f32 {
         self.partial_distances[(i * self.size as u16 + j) as usize]
     }
@@ -231,12 +235,15 @@ where
     }
 
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
-        let res = v1
-            .iter()
-            .zip(v2.iter())
-            .map(|(i, j)| self.cc.partial_distance(*i, *j))
-            .sum::<f32>();
-        res.sqrt()
+        let mut partial_distances = [0.0_f32; 48];
+        for ix in 0..48 {
+            let partial_1 = v1[ix];
+            let partial_2 = v2[ix];
+            let partial_distance = self.cc.partial_distance(partial_1, partial_2);
+            partial_distances[ix] = partial_distance;
+        }
+
+        vecmath::sum_48(&partial_distances).sqrt()
     }
 }
 
