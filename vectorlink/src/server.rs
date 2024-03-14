@@ -82,6 +82,15 @@ impl Operation {
             Operation::Error { message } => None,
         }
     }
+
+    pub fn id(self) -> Option<String> {
+        match self {
+            Operation::Inserted { id, .. }
+            | Operation::Changed { id, .. }
+            | Operation::Deleted { id } => Some(id),
+            Operation::Error { .. } => None,
+        }
+    }
 }
 
 #[derive(Deserialize, Debug)]

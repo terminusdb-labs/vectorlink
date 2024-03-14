@@ -228,6 +228,8 @@ enum Commands {
         #[arg(short, long, default_value_t = 8080)]
         port: u16,
         #[arg(short, long)]
+        operations_file: String,
+        #[arg(short, long)]
         directory: String,
         #[arg(short, long)]
         commit: String,
@@ -715,6 +717,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
         Commands::YaleEr {
             port,
+            operations_file,
             directory,
             commit,
             domain,
@@ -722,9 +725,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             key,
         } => {
             let key = key_or_env(key);
-            yale_er::serve(port, &directory, &commit, &domain, size, &key)
-                .await
-                .unwrap()
+            yale_er::serve(
+                port,
+                &operations_file,
+                &directory,
+                &commit,
+                &domain,
+                size,
+                &key,
+            )
+            .await
+            .unwrap()
         }
     }
 
