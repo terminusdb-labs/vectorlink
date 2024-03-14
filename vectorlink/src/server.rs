@@ -137,7 +137,7 @@ enum SpecParseError {
     NoCommitIdOrDomain,
 }
 
-fn query_map(uri: &Uri) -> HashMap<String, String> {
+pub(crate) fn query_map(uri: &Uri) -> HashMap<String, String> {
     uri.query()
         .map(|v| {
             url::form_urlencoded::parse(v.as_bytes())

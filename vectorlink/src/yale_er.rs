@@ -12,12 +12,51 @@ use hyper::{
     Body, Request, Response, Server,
 };
 use reqwest::ResponseBuilderExt;
+use thiserror::Error;
 
-use crate::{configuration::OpenAIHnsw, indexer::create_index_name, vectors::VectorStore};
+use crate::{
+    configuration::OpenAIHnsw,
+    indexer::create_index_name,
+    openai::{self, EmbeddingError},
+    server::query_map,
+    vectors::VectorStore,
+};
+
+#[derive(Debug, Error)]
+pub enum YaleError {
+    #[error("No embedding string specified")]
+    NoEmbeddingStringSpecified,
+    #[error("Embedding error")]
+    EmbeddingError(#[from] EmbeddingError),
+}
+
+struct State {
+    key: String,
+    hnsw: OpenAIHnsw,
+}
 
 pub async fn handle_request(
+    state: Arc<State>,
     request: Request<Body>,
-) -> Result<Response<Body>, Box<dyn Error + Send + Sync>> {
+) -> Result<Response<Body>, YaleError> {
+    let query = query_map(request.uri());
+    let Some(embedding_string) = query.get("string") else {
+        return Ok(Response::builder()
+            .status(400)
+            .body("No embedding string specified".to_string().into())
+            .unwrap());
+    };
+
+    let (embeddings, _) = openai::embeddings_for(
+        &state.key,
+        &[embedding_string.to_owned()],
+        openai::Model::Small3,
+    )
+    .await?;
+    let embedding = embeddings[0];
+
+    //state.hnsw.search(v, number_of_candidates, probe_depth)
+
     Ok(Response::builder()
         .status(200)
         .body("Hello".to_string().into())
@@ -41,11 +80,17 @@ pub async fn serve(
     let store = VectorStore::new(dirpath, size);
     let hnsw = OpenAIHnsw::deserialize(&hnsw_index_path, Arc::new(store))?;
 
+    let state = Arc::new(State {
+        key: key.to_owned(),
+        hnsw,
+    });
+
     let make_svc = make_service_fn(move |connection| {
+        let state2 = state.clone();
         async {
             Ok::<_, Infallible>(service_fn(move |req| {
                 // this probably should respond with a response?
-                handle_request(req)
+                handle_request(state2.clone(), req)
             }))
         }
     });
