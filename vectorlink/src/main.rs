@@ -23,7 +23,7 @@ use clap::CommandFactory;
 use clap::{Parser, Subcommand, ValueEnum};
 use comparator::Centroid32Comparator;
 use comparator::OpenAIComparator;
-use comparator::QuantizedComparator;
+use comparator::Quantized32Comparator;
 use configuration::HnswConfiguration;
 //use hnsw::Hnsw;
 use indexer::index_serialization_path;
@@ -46,11 +46,11 @@ use space::Metric;
 use std::fs::File;
 use std::io::{self, BufRead};
 use vecmath::Embedding;
-use vecmath::QuantizedEmbedding;
+use vecmath::Quantized32Embedding;
 use vecmath::CENTROID_32_LENGTH;
 use vecmath::EMBEDDING_BYTE_LENGTH;
 use vecmath::EMBEDDING_LENGTH;
-use vecmath::QUANTIZED_EMBEDDING_LENGTH;
+use vecmath::QUANTIZED_32_EMBEDDING_LENGTH;
 
 use rayon::iter::Either;
 use rayon::prelude::*;
@@ -597,7 +597,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             if let HnswConfiguration::QuantizedOpenAi(_, hnsw) = hnsw {
                 let c = hnsw.quantized_comparator();
                 let quantized_vecs = c.data.read().unwrap();
-                let mut cursor: &[QuantizedEmbedding] = &quantized_vecs;
+                let mut cursor: &[Quantized32Embedding] = &quantized_vecs;
                 let quantizer = hnsw.quantizer();
                 // sample_avg = sum(errors)/|errors|
                 // sample_var = sum((error - sample_avg)^2)/|errors|

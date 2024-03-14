@@ -19,12 +19,12 @@ use tokio_stream::wrappers::LinesStream;
 use urlencoding::encode;
 
 use crate::{
-    comparator::{Centroid32Comparator, OpenAIComparator, QuantizedComparator},
+    comparator::{Centroid32Comparator, OpenAIComparator, Quantized32Comparator},
     configuration::HnswConfiguration,
     indexer::{create_index_name, index_serialization_path, OpenAI, Point},
     openai::{embeddings_for, EmbeddingError, Model},
     server::Operation,
-    vecmath::{Embedding, QUANTIZED_EMBEDDING_LENGTH},
+    vecmath::{Embedding, QUANTIZED_32_EMBEDDING_LENGTH},
     vectors::VectorStore,
 };
 
@@ -260,7 +260,7 @@ pub async fn index_using_operations_and_vectors<
     let hnsw = if quantize_hnsw {
         let number_of_vectors = NUMBER_OF_CENTROIDS / 10;
         let cc = Centroid32Comparator::default();
-        let qc = QuantizedComparator {
+        let qc = Quantized32Comparator {
             cc: cc.clone(),
             data: Default::default(),
         };

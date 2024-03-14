@@ -23,7 +23,7 @@ use urlencoding::encode;
 use crate::comparator::Centroid32Comparator;
 use crate::vecmath::{
     Centroid32, Embedding, EmbeddingBytes, CENTROID_32_LENGTH, EMBEDDING_BYTE_LENGTH,
-    EMBEDDING_LENGTH, QUANTIZED_EMBEDDING_LENGTH,
+    EMBEDDING_LENGTH, QUANTIZED_32_EMBEDDING_LENGTH,
 };
 use parallel_hnsw::pq::HnswQuantizer;
 
@@ -53,7 +53,7 @@ pub struct QuantizedDomain {
     quantizer: HnswQuantizer<
         EMBEDDING_LENGTH,
         CENTROID_32_LENGTH,
-        QUANTIZED_EMBEDDING_LENGTH,
+        QUANTIZED_32_EMBEDDING_LENGTH,
         Centroid32Comparator,
     >,
 }

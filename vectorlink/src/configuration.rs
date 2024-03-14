@@ -6,9 +6,15 @@ use rayon::iter::IndexedParallelIterator;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    comparator::{Centroid32Comparator, OpenAIComparator, QuantizedComparator},
+    comparator::{
+        Centroid16Comparator, Centroid32Comparator, OpenAIComparator, Quantized16Comparator,
+        Quantized32Comparator,
+    },
     openai::Model,
-    vecmath::{Embedding, CENTROID_32_LENGTH, EMBEDDING_LENGTH, QUANTIZED_EMBEDDING_LENGTH},
+    vecmath::{
+        Embedding, CENTROID_16_LENGTH, CENTROID_32_LENGTH, EMBEDDING_LENGTH,
+        QUANTIZED_16_EMBEDDING_LENGTH, QUANTIZED_32_EMBEDDING_LENGTH,
+    },
     vectors::VectorStore,
 };
 
@@ -17,6 +23,7 @@ pub type OpenAIHnsw = Hnsw<OpenAIComparator>;
 #[derive(Serialize, Deserialize)]
 pub enum HnswConfigurationType {
     QuantizedOpenAi,
+    SmallQuantizedOpenAi,
     UnquantizedOpenAi,
 }
 
@@ -34,9 +41,20 @@ pub enum HnswConfiguration {
         QuantizedHnsw<
             EMBEDDING_LENGTH,
             CENTROID_32_LENGTH,
-            QUANTIZED_EMBEDDING_LENGTH,
+            QUANTIZED_32_EMBEDDING_LENGTH,
             Centroid32Comparator,
-            QuantizedComparator,
+            Quantized32Comparator,
+            OpenAIComparator,
+        >,
+    ),
+    SmallQuantizedOpenAi(
+        Model,
+        QuantizedHnsw<
+            EMBEDDING_LENGTH,
+            CENTROID_16_LENGTH,
+            QUANTIZED_16_EMBEDDING_LENGTH,
+            Centroid16Comparator,
+            Quantized16Comparator,
             OpenAIComparator,
         >,
     ),
@@ -44,10 +62,13 @@ pub enum HnswConfiguration {
 }
 
 impl HnswConfiguration {
-    pub fn state(&self) -> HnswConfigurationState {
+    fn state(&self) -> HnswConfigurationState {
         let (typ, model) = match self {
             HnswConfiguration::QuantizedOpenAi(model, _) => {
                 (HnswConfigurationType::QuantizedOpenAi, model)
+            }
+            HnswConfiguration::SmallQuantizedOpenAi(model, _) => {
+                (HnswConfigurationType::SmallQuantizedOpenAi, model)
             }
             HnswConfiguration::UnquantizedOpenAi(model, _) => {
                 (HnswConfigurationType::UnquantizedOpenAi, model)
@@ -65,12 +86,14 @@ impl HnswConfiguration {
     pub fn model(&self) -> Model {
         match self {
             HnswConfiguration::QuantizedOpenAi(m, _) => *m,
+            HnswConfiguration::SmallQuantizedOpenAi(m, _) => *m,
             HnswConfiguration::UnquantizedOpenAi(m, _) => *m,
         }
     }
     pub fn vector_count(&self) -> usize {
         match self {
             HnswConfiguration::QuantizedOpenAi(_model, q) => q.vector_count(),
+            HnswConfiguration::SmallQuantizedOpenAi(_model, q) => q.vector_count(),
             HnswConfiguration::UnquantizedOpenAi(_model, h) => h.vector_count(),
         }
     }
@@ -84,6 +107,9 @@ impl HnswConfiguration {
             HnswConfiguration::QuantizedOpenAi(_model, q) => {
                 q.search(v, number_of_candidates, probe_depth)
             }
+            HnswConfiguration::SmallQuantizedOpenAi(_model, q) => {
+                q.search(v, number_of_candidates, probe_depth)
+            }
             HnswConfiguration::UnquantizedOpenAi(_model, h) => {
                 h.search(v, number_of_candidates, probe_depth)
             }
@@ -93,6 +119,9 @@ impl HnswConfiguration {
     pub fn improve_neighbors(&mut self, threshold: f32, recall: f32) {
         match self {
             HnswConfiguration::QuantizedOpenAi(_model, q) => q.improve_neighbors(threshold, recall),
+            HnswConfiguration::SmallQuantizedOpenAi(_model, q) => {
+                q.improve_neighbors(threshold, recall)
+            }
             HnswConfiguration::UnquantizedOpenAi(_model, h) => {
                 h.improve_neighbors(threshold, recall)
             }
@@ -102,6 +131,7 @@ impl HnswConfiguration {
     pub fn zero_neighborhood_size(&self) -> usize {
         match self {
             HnswConfiguration::QuantizedOpenAi(_model, q) => q.zero_neighborhood_size(),
+            HnswConfiguration::SmallQuantizedOpenAi(_model, q) => q.zero_neighborhood_size(),
             HnswConfiguration::UnquantizedOpenAi(_model, h) => h.zero_neighborhood_size(),
         }
     }
@@ -115,14 +145,18 @@ impl HnswConfiguration {
             HnswConfiguration::QuantizedOpenAi(_model, q) => {
                 Either::Left(q.threshold_nn(threshold, probe_depth, initial_search_depth))
             }
-            HnswConfiguration::UnquantizedOpenAi(_model, h) => {
-                Either::Right(h.threshold_nn(threshold, probe_depth, initial_search_depth))
-            }
+            HnswConfiguration::SmallQuantizedOpenAi(_model, q) => Either::Right(Either::Left(
+                q.threshold_nn(threshold, probe_depth, initial_search_depth),
+            )),
+            HnswConfiguration::UnquantizedOpenAi(_model, h) => Either::Right(Either::Right(
+                h.threshold_nn(threshold, probe_depth, initial_search_depth),
+            )),
         }
     }
     pub fn stochastic_recall(&self, recall_proportion: f32) -> f32 {
         match self {
             HnswConfiguration::QuantizedOpenAi(_, q) => q.stochastic_recall(recall_proportion),
+            HnswConfiguration::SmallQuantizedOpenAi(_, q) => q.stochastic_recall(recall_proportion),
             HnswConfiguration::UnquantizedOpenAi(_, h) => h.stochastic_recall(recall_proportion),
         }
     }
@@ -142,6 +176,9 @@ impl Serializable for HnswConfiguration {
             HnswConfiguration::UnquantizedOpenAi(_, qhnsw) => {
                 qhnsw.serialize(&path)?;
             }
+            HnswConfiguration::SmallQuantizedOpenAi(_, qhnsw) => {
+                qhnsw.serialize(&path)?;
+            }
         }
         let state_path: PathBuf = path.as_ref().join("state.json");
         let mut state_file = OpenOptions::new()
@@ -158,7 +195,7 @@ impl Serializable for HnswConfiguration {
         path: P,
         params: Self::Params,
     ) -> Result<Self, parallel_hnsw::SerializationError> {
-        let mut state_path: PathBuf = path.as_ref().join("state.json");
+        let state_path: PathBuf = path.as_ref().join("state.json");
         let mut state_file = OpenOptions::new()
             .create(false)
             .read(true)
@@ -174,6 +211,10 @@ impl Serializable for HnswConfiguration {
             HnswConfigurationType::UnquantizedOpenAi => {
                 HnswConfiguration::UnquantizedOpenAi(state.model, Hnsw::deserialize(path, params)?)
             }
+            HnswConfigurationType::SmallQuantizedOpenAi => HnswConfiguration::SmallQuantizedOpenAi(
+                state.model,
+                QuantizedHnsw::deserialize(path, params)?,
+            ),
         })
     }
 }
