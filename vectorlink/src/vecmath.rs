@@ -35,7 +35,7 @@ pub fn random_normalized_embedding<R: Rng>(rng: &mut R) -> Embedding {
 }
 
 #[inline]
-fn clamp_01(f: f32) -> f32 {
+pub fn clamp_01(f: f32) -> f32 {
     if f <= 0.0 {
         0.0
     } else if f >= 1.0 {
@@ -100,6 +100,9 @@ pub fn euclidean_distance_32(v1: &Centroid32, v2: &Centroid32) -> f32 {
     simd::euclidean_distance_simd(v1, v2)
 }
 
+pub fn euclidean_partial_distance_32(v1: &Centroid32, v2: &Centroid32) -> f32 {
+    simd::euclidean_partial_distance_simd(v1, v2)
+}
 pub fn cosine_partial_distance_32(v1: &Centroid32, v2: &Centroid32) -> f32 {
     simd::cosine_partial_distance_32_simd(v1, v2)
 }

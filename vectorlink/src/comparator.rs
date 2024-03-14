@@ -14,7 +14,8 @@ use std::{path::Path, sync::Arc};
 use parallel_hnsw::{pq, AbstractVector, Comparator, Serializable, SerializationError, VectorId};
 
 use crate::vecmath::{
-    self, Centroid32, QuantizedEmbedding, CENTROID_32_BYTE_LENGTH, QUANTIZED_EMBEDDING_LENGTH,
+    self, clamp_01, Centroid32, QuantizedEmbedding, CENTROID_32_BYTE_LENGTH,
+    QUANTIZED_EMBEDDING_LENGTH,
 };
 use crate::vectors::LoadedVec;
 use crate::{
@@ -93,7 +94,7 @@ impl MemoizedPartialDistances32 {
         for c in 0..size * size {
             let i = c / size;
             let j = c % size;
-            partial_distances[c] = vecmath::cosine_partial_distance_32(&vectors[i], &vectors[j]);
+            partial_distances[c] = vecmath::euclidean_partial_distance_32(&vectors[i], &vectors[j]);
         }
 
         Self {
@@ -230,20 +231,12 @@ where
     }
 
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
-        let norm1 = v1
-            .iter()
-            .map(|i| self.cc.partial_distance(*i, *i))
-            .sum::<f32>();
-        let norm2 = v2
-            .iter()
-            .map(|i| self.cc.partial_distance(*i, *i))
-            .sum::<f32>();
         let res = v1
             .iter()
             .zip(v2.iter())
             .map(|(i, j)| self.cc.partial_distance(*i, *j))
             .sum::<f32>();
-        res / (norm1 * norm2)
+        res.sqrt()
     }
 }
 
