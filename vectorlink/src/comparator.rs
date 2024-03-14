@@ -12,7 +12,7 @@ use std::{path::Path, sync::Arc};
 use parallel_hnsw::{pq, Comparator, Serializable, SerializationError, VectorId};
 
 use crate::vecmath::{
-    self, Centroid16, Centroid32, Quantized16Embedding, Quantized32Embedding,
+    self, clamp_01, Centroid16, Centroid32, Quantized16Embedding, Quantized32Embedding,
     CENTROID_16_BYTE_LENGTH, CENTROID_32_BYTE_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH,
     QUANTIZED_32_EMBEDDING_LENGTH,
 };
@@ -369,7 +369,7 @@ where
             partial_distances[ix] = partial_distance;
         }
 
-        (vecmath::sum_48(&partial_distances) - 1_f32) / -2_f32
+        clamp_01((vecmath::sum_48(&partial_distances) - 1_f32) / -2_f32)
     }
 }
 
