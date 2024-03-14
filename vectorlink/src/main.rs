@@ -1,7 +1,5 @@
 #![feature(portable_simd)]
 
-use std::collections::HashSet;
-use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Write;
 use std::path::Path;
@@ -21,41 +19,26 @@ mod search_server;
 use batch::index_from_operations_file;
 use clap::CommandFactory;
 use clap::{Parser, Subcommand, ValueEnum};
-use comparator::Centroid32Comparator;
-use comparator::OpenAIComparator;
-use comparator::Quantized32Comparator;
 use configuration::HnswConfiguration;
 //use hnsw::Hnsw;
-use indexer::index_serialization_path;
-use indexer::start_indexing_from_operations;
+use indexer::OpenAI;
 use indexer::Point;
-use indexer::{operations_to_point_operations, OpenAI};
-use itertools::Itertools;
 use openai::Model;
-use parallel_hnsw::pq::QuantizedHnsw;
+use parallel_hnsw::pq::Quantizer;
 use parallel_hnsw::pq::VectorSelector;
-use parallel_hnsw::pq::{HnswQuantizer, Quantizer};
+use parallel_hnsw::AbstractVector;
 use parallel_hnsw::Comparator;
 use parallel_hnsw::Serializable;
-use parallel_hnsw::{AbstractVector, AllVectorIterator, Hnsw, NodeDistance, NodeId, VectorId};
-use rand::thread_rng;
-use rand::*;
-use serde_json::json;
-use server::Operation;
 use space::Metric;
 use std::fs::File;
-use std::io::{self, BufRead};
-use vecmath::Embedding;
+use std::io::{self};
 use vecmath::Quantized32Embedding;
-use vecmath::CENTROID_32_LENGTH;
 use vecmath::EMBEDDING_BYTE_LENGTH;
 use vecmath::EMBEDDING_LENGTH;
-use vecmath::QUANTIZED_32_EMBEDDING_LENGTH;
 
 use rayon::iter::Either;
 use rayon::prelude::*;
 
-use crate::configuration::OpenAIHnsw;
 use crate::vecmath::Quantized16Embedding;
 
 use {indexer::create_index_name, vecmath::empty_embedding, vectors::VectorStore};
@@ -82,20 +65,6 @@ enum Commands {
         size: usize,
     },
     Load {
-        #[arg(short, long)]
-        key: Option<String>,
-        #[arg(short, long)]
-        commit: String,
-        #[arg(long)]
-        domain: String,
-        #[arg(short, long)]
-        directory: String,
-        #[arg(short, long)]
-        input: String,
-        #[arg(short, long, default_value_t = 10000)]
-        size: usize,
-    },
-    Load2 {
         #[arg(short, long)]
         key: Option<String>,
         #[arg(short, long)]
@@ -375,47 +344,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Commands::Load {
             key,
             domain,
-            commit,
-            directory,
-            input,
-            size,
-        } => {
-            let path = Path::new(&input);
-            let dirpath = Path::new(&directory);
-            panic!("yikes!");
-            /*
-            let mut hnsw: HnswIndex<OpenAIComparator, = Hnsw::new(OpenAI);
-            let store = VectorStore::new(dirpath, size);
-            let resolved_domain = store.get_domain(&domain)?;
-
-            let f = File::options().read(true).open(path)?;
-
-            let lines = io::BufReader::new(f).lines();
-            let opstream = &lines
-                .map(|l| {
-                    let ro: io::Result<Operation> = serde_json::from_str(&l.unwrap())
-                        .map_err(|e| std::io::Error::new(ErrorKind::Other, e));
-                    ro
-                })
-                .chunks(100);
-
-            let key = key_or_env(key);
-            for structs in opstream {
-                let structs: Vec<_> = structs.collect();
-                let new_ops =
-                    operations_to_point_operations(&resolved_domain, &store, structs, &key)
-                        .await?
-                        .0;
-                hnsw = start_indexing_from_operations(hnsw, new_ops).unwrap();
-            }
-            let index_id = create_index_name(&domain, &commit);
-            let filename = index_serialization_path(dirpath, &index_id);
-            serialize_index(filename, hnsw.clone()).unwrap();
-            */
-        }
-        Commands::Load2 {
-            key,
-            domain,
             directory,
             input,
             size,
@@ -505,7 +433,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             directory,
             size,
             improve_neighbors,
-            promote,
+            promote: _,
             proportion,
         } => {
             let dirpath = Path::new(&directory);
@@ -566,7 +494,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         {
                             let mut lock = output.lock();
                             serde_json::to_writer(&mut lock, &result_tuple).unwrap();
-                            write!(&mut lock, "\n").unwrap();
+                            writeln!(&mut lock).unwrap();
                         }
 
                         // do index lookup stuff
@@ -594,7 +522,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 create_index_name(&domain, &commit)
             ));
             let store = VectorStore::new(dirpath, size);
-            let hnsw = HnswConfiguration::deserialize(&hnsw_index_path, Arc::new(store)).unwrap();
+            let hnsw = HnswConfiguration::deserialize(hnsw_index_path, Arc::new(store)).unwrap();
             if let HnswConfiguration::QuantizedOpenAi(_, hnsw) = hnsw {
                 let c = hnsw.quantized_comparator();
                 let quantized_vecs = c.data.read().unwrap();
@@ -636,7 +564,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     .map(|e| (e - sample_avg))
                     .map(|x| x * x)
                     .sum::<f32>()
-                    / errors.len() as f32;
+                    / (errors.len() - 1) as f32;
                 let sample_deviation = sample_var.sqrt();
 
                 eprintln!("sample avg: {sample_avg}\nsample var: {sample_var}\nsample deviation: {sample_deviation}");
@@ -650,7 +578,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
                 let fc = hnsw.full_comparator();
 
-                let mut errors = vec![0.0_f32; hnsw.vector_count()];
+                let errors = vec![0.0_f32; hnsw.vector_count()];
 
                 let mut offset = 0;
                 for chunk in fc.vector_chunks() {

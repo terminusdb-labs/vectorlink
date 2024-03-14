@@ -90,6 +90,8 @@ impl HnswConfiguration {
             HnswConfiguration::UnquantizedOpenAi(m, _) => *m,
         }
     }
+
+    #[allow(dead_code)]
     pub fn vector_count(&self) -> usize {
         match self {
             HnswConfiguration::QuantizedOpenAi(_model, q) => q.vector_count(),
@@ -97,6 +99,7 @@ impl HnswConfiguration {
             HnswConfiguration::UnquantizedOpenAi(_model, h) => h.vector_count(),
         }
     }
+
     pub fn search(
         &self,
         v: AbstractVector<Embedding>,

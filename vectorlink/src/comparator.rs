@@ -1,4 +1,3 @@
-use itertools::{IntoChunks, Itertools};
 use parallel_hnsw::pq::PartialDistance;
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
@@ -7,14 +6,13 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::{RwLock, RwLockReadGuard};
 use std::{path::Path, sync::Arc};
 
-use parallel_hnsw::{pq, AbstractVector, Comparator, Serializable, SerializationError, VectorId};
+use parallel_hnsw::{pq, Comparator, Serializable, SerializationError, VectorId};
 
 use crate::vecmath::{
-    self, clamp_01, Centroid16, Centroid32, Quantized16Embedding, Quantized32Embedding,
+    self, Centroid16, Centroid32, Quantized16Embedding, Quantized32Embedding,
     CENTROID_16_BYTE_LENGTH, CENTROID_32_BYTE_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH,
     QUANTIZED_32_EMBEDDING_LENGTH,
 };
@@ -76,7 +74,7 @@ impl Serializable for OpenAIComparator {
         let mut comparator_file = OpenOptions::new().read(true).open(path)?;
         let mut contents = String::new();
         comparator_file.read_to_string(&mut contents)?;
-        let ComparatorMeta { domain, size } = serde_json::from_str(&contents)?;
+        let ComparatorMeta { domain, size: _ } = serde_json::from_str(&contents)?;
         let domain = store.get_domain(&domain)?;
         Ok(OpenAIComparator { domain, store })
     }
@@ -104,6 +102,7 @@ impl MemoizedPartialDistances32 {
         }
     }
 
+    #[allow(dead_code)]
     fn all_distances(&self) -> &[f32] {
         &self.partial_distances
     }
@@ -135,6 +134,7 @@ impl MemoizedPartialDistances16 {
         }
     }
 
+    #[allow(dead_code)]
     fn all_distances(&self) -> &[f32] {
         &self.partial_distances
     }
@@ -394,7 +394,7 @@ impl Serializable for Quantized32Comparator {
 
     fn deserialize<P: AsRef<Path>>(
         path: P,
-        params: Self::Params,
+        _params: Self::Params,
     ) -> Result<Self, SerializationError> {
         let path_buf: PathBuf = path.as_ref().into();
         let index_path = path_buf.join("index");
@@ -497,7 +497,7 @@ impl Serializable for Quantized16Comparator {
 
     fn deserialize<P: AsRef<Path>>(
         path: P,
-        params: Self::Params,
+        _params: Self::Params,
     ) -> Result<Self, SerializationError> {
         let path_buf: PathBuf = path.as_ref().into();
         let index_path = path_buf.join("index");
@@ -557,6 +557,7 @@ impl<T, I: Iterator<Item = T>> Iterator for ChunkedVecIterator<T, I> {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use std::sync::{Arc, RwLock};
 

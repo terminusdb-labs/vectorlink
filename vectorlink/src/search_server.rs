@@ -13,12 +13,12 @@ use hyper::{
     Body, Request, Response, Server,
 };
 use parallel_hnsw::{AbstractVector, Serializable};
-use reqwest::ResponseBuilderExt;
+
 use serde::Serialize;
 use thiserror::Error;
 
 use crate::{
-    configuration::{HnswConfiguration, OpenAIHnsw},
+    configuration::HnswConfiguration,
     indexer::create_index_name,
     openai::{self, EmbeddingError},
     server::{query_map, Operation},
@@ -26,14 +26,12 @@ use crate::{
 };
 
 #[derive(Debug, Error)]
-pub enum YaleError {
-    #[error("No embedding string specified")]
-    NoEmbeddingStringSpecified,
+pub enum SearchServerError {
     #[error("Embedding error")]
     EmbeddingError(#[from] EmbeddingError),
 }
 
-struct State {
+pub struct State {
     key: String,
     hnsw: HnswConfiguration,
     dict: Vec<String>,
@@ -63,7 +61,7 @@ struct MatchResult {
 pub async fn handle_request(
     state: Arc<State>,
     request: Request<Body>,
-) -> Result<Response<Body>, YaleError> {
+) -> Result<Response<Body>, SearchServerError> {
     let query = query_map(request.uri());
     let Some(embedding_string) = query.get("string") else {
         return Ok(Response::builder()
@@ -128,7 +126,7 @@ pub async fn serve(
         dict,
     });
 
-    let make_svc = make_service_fn(move |connection| {
+    let make_svc = make_service_fn(move |_connection| {
         let state2 = state.clone();
         async {
             Ok::<_, Infallible>(service_fn(move |req| {
