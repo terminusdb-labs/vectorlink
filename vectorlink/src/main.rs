@@ -254,7 +254,7 @@ fn user_forward_header_or_env(c: Option<String>) -> String {
 impl HnswConfiguration {
     fn vector_count(&self) -> usize {
         match self {
-            HnswConfiguration::QuantizedOpenAI(q) => q.vector_count(),
+            HnswConfiguration::QuantizedOpenAi(q) => q.vector_count(),
             HnswConfiguration::UnquantizedOpenAi(h) => h.vector_count(),
         }
     }
@@ -265,7 +265,7 @@ impl HnswConfiguration {
         probe_depth: usize,
     ) -> Vec<(VectorId, f32)> {
         match self {
-            HnswConfiguration::QuantizedOpenAI(q) => q.search(v, number_of_candidates, probe_depth),
+            HnswConfiguration::QuantizedOpenAi(q) => q.search(v, number_of_candidates, probe_depth),
             HnswConfiguration::UnquantizedOpenAi(h) => {
                 h.search(v, number_of_candidates, probe_depth)
             }
@@ -274,14 +274,14 @@ impl HnswConfiguration {
 
     pub fn improve_neighbors(&mut self, threshold: f32, recall: f32) {
         match self {
-            HnswConfiguration::QuantizedOpenAI(q) => q.improve_neighbors(threshold, recall),
+            HnswConfiguration::QuantizedOpenAi(q) => q.improve_neighbors(threshold, recall),
             HnswConfiguration::UnquantizedOpenAi(h) => h.improve_neighbors(threshold, recall),
         }
     }
 
     pub fn zero_neighborhood_size(&self) -> usize {
         match self {
-            HnswConfiguration::QuantizedOpenAI(q) => q.zero_neighborhood_size(),
+            HnswConfiguration::QuantizedOpenAi(q) => q.zero_neighborhood_size(),
             HnswConfiguration::UnquantizedOpenAi(h) => h.zero_neighborhood_size(),
         }
     }
@@ -292,7 +292,7 @@ impl HnswConfiguration {
         initial_search_depth: usize,
     ) -> impl IndexedParallelIterator<Item = (VectorId, Vec<(VectorId, f32)>)> + '_ {
         match self {
-            HnswConfiguration::QuantizedOpenAI(q) => {
+            HnswConfiguration::QuantizedOpenAi(q) => {
                 Either::Left(q.threshold_nn(threshold, probe_depth, initial_search_depth))
             }
             HnswConfiguration::UnquantizedOpenAi(h) => {
@@ -648,7 +648,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             ));
             let store = VectorStore::new(dirpath, size);
             let hnsw = HnswConfiguration::deserialize(&hnsw_index_path, Arc::new(store)).unwrap();
-            if let HnswConfiguration::QuantizedOpenAI(hnsw) = hnsw {
+            if let HnswConfiguration::QuantizedOpenAi(hnsw) = hnsw {
                 let c = hnsw.quantized_comparator();
                 let quantized_vecs = c.data.read().unwrap();
                 let mut cursor: &[QuantizedEmbedding] = &quantized_vecs;

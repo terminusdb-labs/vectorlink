@@ -20,6 +20,7 @@ use urlencoding::encode;
 
 use crate::{
     comparator::{Centroid32Comparator, OpenAIComparator, QuantizedComparator},
+    configuration::HnswConfiguration,
     indexer::{create_index_name, index_serialization_path, OpenAI, Point},
     openai::{embeddings_for, EmbeddingError, Model},
     server::Operation,
@@ -255,7 +256,7 @@ pub async fn index_using_operations_and_vectors<
         .collect();
 
     eprintln!("ready to generate hnsw");
-    if quantize_hnsw {
+    let hnsw = if quantize_hnsw {
         let number_of_vectors = NUMBER_OF_CENTROIDS / 10;
         let cc = Centroid32Comparator::default();
         let qc = QuantizedComparator {
@@ -264,12 +265,13 @@ pub async fn index_using_operations_and_vectors<
         };
         let c = comparator;
         let hnsw = QuantizedHnsw::new(number_of_vectors, cc, qc, c);
-        hnsw.serialize(&staging_file)?;
+        HnswConfiguration::QuantizedOpenAi(hnsw)
     } else {
         let hnsw = Hnsw::generate(comparator, vecs, 24, 48, 12);
-        eprintln!("done generating hnsw");
-        hnsw.serialize(&staging_file)?;
-    }
+        HnswConfiguration::UnquantizedOpenAi(hnsw)
+    };
+    eprintln!("done generating hnsw");
+    hnsw.serialize(&staging_file)?;
     eprintln!("done serializing hnsw");
     eprintln!("renaming {staging_file:?} to {final_file:?}");
     tokio::fs::rename(&staging_file, &final_file).await?;

@@ -25,7 +25,7 @@ pub struct HnswConfigurationState {
 }
 
 pub enum HnswConfiguration {
-    QuantizedOpenAI(
+    QuantizedOpenAi(
         QuantizedHnsw<
             EMBEDDING_LENGTH,
             CENTROID_32_LENGTH,
@@ -41,7 +41,7 @@ pub enum HnswConfiguration {
 impl HnswConfiguration {
     fn state(&self) -> HnswConfigurationState {
         let typ = match self {
-            HnswConfiguration::QuantizedOpenAI(_) => HnswConfigurationType::QuantizedOpenAi,
+            HnswConfiguration::QuantizedOpenAi(_) => HnswConfigurationType::QuantizedOpenAi,
             HnswConfiguration::UnquantizedOpenAi(_) => HnswConfigurationType::UnquantizedOpenAi,
         };
         let version = 1;
@@ -58,7 +58,7 @@ impl Serializable for HnswConfiguration {
         path: P,
     ) -> Result<(), parallel_hnsw::SerializationError> {
         match self {
-            HnswConfiguration::QuantizedOpenAI(hnsw) => {
+            HnswConfiguration::QuantizedOpenAi(hnsw) => {
                 hnsw.serialize(&path)?;
             }
             HnswConfiguration::UnquantizedOpenAi(qhnsw) => {
@@ -90,7 +90,7 @@ impl Serializable for HnswConfiguration {
 
         Ok(match state.typ {
             HnswConfigurationType::QuantizedOpenAi => {
-                HnswConfiguration::QuantizedOpenAI(QuantizedHnsw::deserialize(path, params)?)
+                HnswConfiguration::QuantizedOpenAi(QuantizedHnsw::deserialize(path, params)?)
             }
             HnswConfigurationType::UnquantizedOpenAi => {
                 HnswConfiguration::UnquantizedOpenAi(Hnsw::deserialize(path, params)?)
