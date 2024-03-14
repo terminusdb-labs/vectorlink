@@ -16,7 +16,7 @@ mod server;
 mod vecmath;
 mod vectors;
 
-mod yale_er;
+mod search_server;
 
 use batch::index_from_operations_file;
 use clap::CommandFactory;
@@ -224,7 +224,7 @@ enum Commands {
         #[arg(short, long, default_value_t = 10000)]
         size: usize,
     },
-    YaleEr {
+    SearchServer {
         #[arg(short, long, default_value_t = 8080)]
         port: u16,
         #[arg(short, long)]
@@ -719,7 +719,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 panic!("not a pq hnsw index");
             }
         }
-        Commands::YaleEr {
+        Commands::SearchServer {
             port,
             operations_file,
             directory,
@@ -729,7 +729,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             key,
         } => {
             let key = key_or_env(key);
-            yale_er::serve(
+            search_server::serve(
                 port,
                 &operations_file,
                 &directory,
