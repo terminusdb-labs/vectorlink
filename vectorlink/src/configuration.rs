@@ -1,12 +1,14 @@
 use std::{fs::OpenOptions, path::PathBuf, sync::Arc};
 
-use parallel_hnsw::{pq::QuantizedHnsw, Hnsw, Serializable};
+use itertools::Either;
+use parallel_hnsw::{pq::QuantizedHnsw, AbstractVector, Hnsw, Serializable, VectorId};
+use rayon::iter::IndexedParallelIterator;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     comparator::{Centroid32Comparator, OpenAIComparator, QuantizedComparator},
     openai::Model,
-    vecmath::{CENTROID_32_LENGTH, EMBEDDING_LENGTH, QUANTIZED_EMBEDDING_LENGTH},
+    vecmath::{Embedding, CENTROID_32_LENGTH, EMBEDDING_LENGTH, QUANTIZED_EMBEDDING_LENGTH},
     vectors::VectorStore,
 };
 
@@ -42,7 +44,7 @@ pub enum HnswConfiguration {
 }
 
 impl HnswConfiguration {
-    fn state(&self) -> HnswConfigurationState {
+    pub fn state(&self) -> HnswConfigurationState {
         let (typ, model) = match self {
             HnswConfiguration::QuantizedOpenAi(model, _) => {
                 (HnswConfigurationType::QuantizedOpenAi, model)
@@ -64,6 +66,64 @@ impl HnswConfiguration {
         match self {
             HnswConfiguration::QuantizedOpenAi(m, _) => *m,
             HnswConfiguration::UnquantizedOpenAi(m, _) => *m,
+        }
+    }
+    pub fn vector_count(&self) -> usize {
+        match self {
+            HnswConfiguration::QuantizedOpenAi(_model, q) => q.vector_count(),
+            HnswConfiguration::UnquantizedOpenAi(_model, h) => h.vector_count(),
+        }
+    }
+    pub fn search(
+        &self,
+        v: AbstractVector<Embedding>,
+        number_of_candidates: usize,
+        probe_depth: usize,
+    ) -> Vec<(VectorId, f32)> {
+        match self {
+            HnswConfiguration::QuantizedOpenAi(_model, q) => {
+                q.search(v, number_of_candidates, probe_depth)
+            }
+            HnswConfiguration::UnquantizedOpenAi(_model, h) => {
+                h.search(v, number_of_candidates, probe_depth)
+            }
+        }
+    }
+
+    pub fn improve_neighbors(&mut self, threshold: f32, recall: f32) {
+        match self {
+            HnswConfiguration::QuantizedOpenAi(_model, q) => q.improve_neighbors(threshold, recall),
+            HnswConfiguration::UnquantizedOpenAi(_model, h) => {
+                h.improve_neighbors(threshold, recall)
+            }
+        }
+    }
+
+    pub fn zero_neighborhood_size(&self) -> usize {
+        match self {
+            HnswConfiguration::QuantizedOpenAi(_model, q) => q.zero_neighborhood_size(),
+            HnswConfiguration::UnquantizedOpenAi(_model, h) => h.zero_neighborhood_size(),
+        }
+    }
+    pub fn threshold_nn(
+        &self,
+        threshold: f32,
+        probe_depth: usize,
+        initial_search_depth: usize,
+    ) -> impl IndexedParallelIterator<Item = (VectorId, Vec<(VectorId, f32)>)> + '_ {
+        match self {
+            HnswConfiguration::QuantizedOpenAi(_model, q) => {
+                Either::Left(q.threshold_nn(threshold, probe_depth, initial_search_depth))
+            }
+            HnswConfiguration::UnquantizedOpenAi(_model, h) => {
+                Either::Right(h.threshold_nn(threshold, probe_depth, initial_search_depth))
+            }
+        }
+    }
+    pub fn stochastic_recall(&self, recall_proportion: f32) -> f32 {
+        match self {
+            HnswConfiguration::QuantizedOpenAi(_, q) => q.stochastic_recall(recall_proportion),
+            HnswConfiguration::UnquantizedOpenAi(_, h) => h.stochastic_recall(recall_proportion),
         }
     }
 }

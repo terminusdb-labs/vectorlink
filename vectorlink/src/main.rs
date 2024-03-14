@@ -163,6 +163,8 @@ enum Commands {
         directory: String,
         #[arg(short, long, default_value_t = 10000)]
         size: usize,
+        #[arg(short, long, default_value_t = 0.001)]
+        recall_proportion: f32,
     },
     Duplicates {
         #[arg(short, long)]
@@ -267,61 +269,6 @@ fn content_endpoint_or_env(c: Option<String>) -> Option<String> {
 
 fn user_forward_header_or_env(c: Option<String>) -> String {
     c.unwrap_or_else(|| std::env::var("TERMINUSDB_USER_FORWARD_HEADER").unwrap())
-}
-
-impl HnswConfiguration {
-    fn vector_count(&self) -> usize {
-        match self {
-            HnswConfiguration::QuantizedOpenAi(_model, q) => q.vector_count(),
-            HnswConfiguration::UnquantizedOpenAi(_model, h) => h.vector_count(),
-        }
-    }
-    pub fn search(
-        &self,
-        v: AbstractVector<Embedding>,
-        number_of_candidates: usize,
-        probe_depth: usize,
-    ) -> Vec<(VectorId, f32)> {
-        match self {
-            HnswConfiguration::QuantizedOpenAi(_model, q) => {
-                q.search(v, number_of_candidates, probe_depth)
-            }
-            HnswConfiguration::UnquantizedOpenAi(_model, h) => {
-                h.search(v, number_of_candidates, probe_depth)
-            }
-        }
-    }
-
-    pub fn improve_neighbors(&mut self, threshold: f32, recall: f32) {
-        match self {
-            HnswConfiguration::QuantizedOpenAi(_model, q) => q.improve_neighbors(threshold, recall),
-            HnswConfiguration::UnquantizedOpenAi(_model, h) => {
-                h.improve_neighbors(threshold, recall)
-            }
-        }
-    }
-
-    pub fn zero_neighborhood_size(&self) -> usize {
-        match self {
-            HnswConfiguration::QuantizedOpenAi(_model, q) => q.zero_neighborhood_size(),
-            HnswConfiguration::UnquantizedOpenAi(_model, h) => h.zero_neighborhood_size(),
-        }
-    }
-    pub fn threshold_nn(
-        &self,
-        threshold: f32,
-        probe_depth: usize,
-        initial_search_depth: usize,
-    ) -> impl IndexedParallelIterator<Item = (VectorId, Vec<(VectorId, f32)>)> + '_ {
-        match self {
-            HnswConfiguration::QuantizedOpenAi(_model, q) => {
-                Either::Left(q.threshold_nn(threshold, probe_depth, initial_search_depth))
-            }
-            HnswConfiguration::UnquantizedOpenAi(_model, h) => {
-                Either::Right(h.threshold_nn(threshold, probe_depth, initial_search_depth))
-            }
-        }
-    }
 }
 
 #[tokio::main]
@@ -497,6 +444,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             directory,
             size,
             commit,
+            recall_proportion,
         } => {
             eprintln!("Testing recall");
             let dirpath = Path::new(&directory);
@@ -507,31 +455,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             ));
             let store = VectorStore::new(dirpath, size);
             let hnsw = HnswConfiguration::deserialize(hnsw_index_path, Arc::new(store)).unwrap();
-            let mut rng = thread_rng();
-            let num = hnsw.vector_count();
-            let max = (0.001 * num as f32) as usize;
-            let mut seen = HashSet::new();
-            let vecs_to_find: Vec<VectorId> = (0..max)
-                .map(|_| {
-                    let vid: VectorId;
-                    loop {
-                        let v = VectorId(rng.gen_range(0..num));
-                        if seen.insert(v) {
-                            vid = v;
-                            break;
-                        }
-                    }
-                    vid
-                })
-                .collect();
-            let relevant: usize = vecs_to_find
-                .par_iter()
-                .filter(|vid| {
-                    let res = hnsw.search(AbstractVector::Stored(**vid), 3200, 2);
-                    res.iter().map(|(v, _)| v).any(|v| v == *vid)
-                })
-                .count();
-            let recall = relevant as f32 / max as f32;
+            let recall = hnsw.stochastic_recall(recall_proportion);
             eprintln!("Recall: {recall}");
         }
         Commands::Duplicates {
