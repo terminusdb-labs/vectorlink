@@ -641,7 +641,7 @@ impl VectorStore {
             if candidates.len() == count {
                 break;
             } else {
-                let res = rng.gen_range(0..=total);
+                let res = rng.gen_range(0..total);
                 candidates.insert(res);
             }
         }
