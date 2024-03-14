@@ -100,6 +100,10 @@ pub fn euclidean_distance_32(v1: &Centroid32, v2: &Centroid32) -> f32 {
     simd::euclidean_distance_simd(v1, v2)
 }
 
+pub fn cosine_partial_distance_32(v1: &Centroid32, v2: &Centroid32) -> f32 {
+    simd::cosine_partial_distance_32_simd(v1, v2)
+}
+
 pub fn normalize_vec(vec: &mut Embedding) {
     simd::normalize_vec_simd(vec)
 }
@@ -134,7 +138,22 @@ pub mod simd {
         normalize_cosine_distance(sum.reduce_sum())
     }
 
+    pub fn cosine_partial_distance_32_simd(left: &Centroid32, right: &Centroid32) -> f32 {
+        let mut sum = <f32x16>::splat(0.);
+        let l = <f32x16>::from_slice(&left[0..16]);
+        let r = <f32x16>::from_slice(&right[0..16]);
+        sum += l * r;
+        let l = <f32x16>::from_slice(&left[16..32]);
+        let r = <f32x16>::from_slice(&right[16..32]);
+        sum += l * r;
+        sum.reduce_sum()
+    }
+
     pub fn euclidean_distance_simd(left: &Centroid32, right: &Centroid32) -> f32 {
+        euclidean_partial_distance_simd(left, right).sqrt()
+    }
+
+    pub fn euclidean_partial_distance_simd(left: &Centroid32, right: &Centroid32) -> f32 {
         let mut sum = <f32x16>::splat(0.);
         let l = <f32x16>::from_slice(&left[0..16]);
         let r = <f32x16>::from_slice(&right[0..16]);
@@ -144,8 +163,7 @@ pub mod simd {
         let r = <f32x16>::from_slice(&right[16..32]);
         let res = (l - r);
         sum += res * res;
-        let f = sum.reduce_sum();
-        f.sqrt()
+        sum.reduce_sum()
     }
 
     pub fn normalize_vec_simd(vec: &mut Embedding) {

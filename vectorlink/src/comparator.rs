@@ -1,4 +1,5 @@
 use itertools::{IntoChunks, Itertools};
+use parallel_hnsw::pq::PartialDistance;
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
@@ -75,40 +76,40 @@ impl Serializable for OpenAIComparator {
         comparator_file.read_to_string(&mut contents)?;
         let ComparatorMeta { domain, size } = serde_json::from_str(&contents)?;
         let domain = store.get_domain(&domain)?;
-        Ok(OpenAIComparator {
-            domain,
-            store: store.into(),
-        })
+        Ok(OpenAIComparator { domain, store })
     }
 }
 
 #[derive(Default)]
-struct MemoizedDistances32 {
-    distances: Vec<f32>,
+struct MemoizedPartialDistances32 {
+    partial_distances: Vec<f32>,
     size: usize,
 }
 
-impl MemoizedDistances32 {
+impl MemoizedPartialDistances32 {
     fn new(vectors: &[Centroid32]) -> Self {
         let size = vectors.len();
-        let mut distances: Vec<f32> = vec![0.0; size * size];
+        let mut partial_distances: Vec<f32> = vec![0.0; size * size];
         for c in 0..size * size {
             let i = c / size;
             let j = c % size;
-            distances[c] = vecmath::euclidean_distance_32(&vectors[i], &vectors[j]);
+            partial_distances[c] = vecmath::cosine_partial_distance_32(&vectors[i], &vectors[j]);
         }
 
-        Self { distances, size }
+        Self {
+            partial_distances,
+            size,
+        }
     }
 
-    fn distance(&self, i: usize, j: usize) -> f32 {
-        self.distances[i * self.size + j]
+    fn partial_distance(&self, i: u16, j: u16) -> f32 {
+        self.partial_distances[(i * self.size as u16 + j) as usize]
     }
 }
 
 #[derive(Clone, Default)]
 pub struct Centroid32Comparator {
-    distances: Arc<RwLock<MemoizedDistances32>>,
+    distances: Arc<RwLock<MemoizedPartialDistances32>>,
     centroids: Arc<RwLock<Vec<Centroid32>>>,
 }
 
@@ -124,23 +125,14 @@ impl Comparator for Centroid32Comparator {
         }
     }
 
-    fn compare_vec(&self, v1: AbstractVector<Self::T>, v2: AbstractVector<Self::T>) -> f32 {
-        match (v1, v2) {
-            (AbstractVector::Stored(v1), AbstractVector::Stored(v2)) => {
-                let d = self.distances.read().unwrap();
-                let c = self.centroids.read().unwrap();
-                let i = v1.0;
-                let j = v2.0;
-                d.distance(i, j)
-            }
-            (AbstractVector::Stored(_), AbstractVector::Unstored(_)) => todo!(),
-            (AbstractVector::Unstored(_), AbstractVector::Stored(_)) => todo!(),
-            (AbstractVector::Unstored(_), AbstractVector::Unstored(_)) => todo!(),
-        }
-    }
-
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
         vecmath::euclidean_distance_32(v1, v2)
+    }
+}
+
+impl PartialDistance for Centroid32Comparator {
+    fn partial_distance(&self, i: u16, j: u16) -> f32 {
+        self.distances.read().unwrap().partial_distance(i, j)
     }
 }
 
@@ -173,7 +165,7 @@ impl Serializable for Centroid32Comparator {
         file.read_exact(buf)?;
 
         Ok(Self {
-            distances: Arc::new(RwLock::new(MemoizedDistances32::new(&vec))),
+            distances: Arc::new(RwLock::new(MemoizedPartialDistances32::new(&vec))),
             centroids: Arc::new(RwLock::new(vec)),
         })
     }
@@ -190,7 +182,7 @@ impl parallel_hnsw::pq::VectorStore for Centroid32Comparator {
             vectors.push(VectorId(vid + i));
             v
         }));
-        let distances = MemoizedDistances32::new(&data);
+        let distances = MemoizedPartialDistances32::new(&data);
         let mut dist = self.distances.write().unwrap();
         *dist = distances;
         vectors
@@ -216,7 +208,16 @@ impl<'a, T> Deref for ReadLockedVec<'a, T> {
     }
 }
 
-impl Comparator for QuantizedComparator {
+impl PartialDistance for QuantizedComparator {
+    fn partial_distance(&self, i: u16, j: u16) -> f32 {
+        self.cc.partial_distance(i, j)
+    }
+}
+
+impl Comparator for QuantizedComparator
+where
+    QuantizedComparator: PartialDistance,
+{
     type T = QuantizedEmbedding;
 
     type Borrowable<'a> = ReadLockedVec<'a, Self::T>;
@@ -229,19 +230,20 @@ impl Comparator for QuantizedComparator {
     }
 
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
-        let v_reconstruct1: Vec<f32> = v1
+        let norm1 = v1
             .iter()
-            .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter())
-            .collect();
-        let v_reconstruct2: Vec<f32> = v2
+            .map(|i| self.cc.partial_distance(*i, *i))
+            .sum::<f32>();
+        let norm2 = v2
             .iter()
-            .flat_map(|i| self.cc.lookup(VectorId(*i as usize)).into_iter())
-            .collect();
-        let mut ar1 = [0.0_f32; 1536];
-        let mut ar2 = [0.0_f32; 1536];
-        ar1.copy_from_slice(&v_reconstruct1);
-        ar2.copy_from_slice(&v_reconstruct2);
-        normalized_cosine_distance(&ar1, &ar2)
+            .map(|i| self.cc.partial_distance(*i, *i))
+            .sum::<f32>();
+        let res = v1
+            .iter()
+            .zip(v2.iter())
+            .map(|(i, j)| self.cc.partial_distance(*i, *j))
+            .sum::<f32>();
+        res / (norm1 * norm2)
     }
 }
 
@@ -352,6 +354,7 @@ mod tests {
 
     use crate::comparator::Centroid32Comparator;
     use crate::comparator::Comparator;
+    use crate::comparator::MemoizedPartialDistances32;
     #[test]
     fn centroid32test() {
         /*
@@ -364,8 +367,12 @@ mod tests {
             .collect();
          */
         let vectors = Vec::new();
+        let distances = Arc::new(RwLock::new(MemoizedPartialDistances32::new(&vectors)));
         let centroids = Arc::new(RwLock::new(vectors));
-        let cc = Centroid32Comparator { centroids };
+        let cc = Centroid32Comparator {
+            distances,
+            centroids,
+        };
         let mut v1 = [0.0_f32; 32];
         v1[0] = 1.0;
         v1[1] = 1.0;
