@@ -19,7 +19,10 @@ use tokio_stream::wrappers::LinesStream;
 use urlencoding::encode;
 
 use crate::{
-    comparator::{Centroid32Comparator, OpenAIComparator, Quantized32Comparator},
+    comparator::{
+        Centroid16Comparator, Centroid32Comparator, OpenAIComparator, Quantized16Comparator,
+        Quantized32Comparator,
+    },
     configuration::HnswConfiguration,
     indexer::{create_index_name, index_serialization_path, OpenAI, Point},
     openai::{embeddings_for, EmbeddingError, Model},
@@ -259,14 +262,14 @@ pub async fn index_using_operations_and_vectors<
     eprintln!("ready to generate hnsw");
     let hnsw = if quantize_hnsw {
         let number_of_vectors = NUMBER_OF_CENTROIDS / 10;
-        let cc = Centroid32Comparator::default();
-        let qc = Quantized32Comparator {
+        let cc = Centroid16Comparator::default();
+        let qc = Quantized16Comparator {
             cc: cc.clone(),
             data: Default::default(),
         };
         let c = comparator;
         let hnsw = QuantizedHnsw::new(number_of_vectors, cc, qc, c);
-        HnswConfiguration::QuantizedOpenAi(model, hnsw)
+        HnswConfiguration::SmallQuantizedOpenAi(model, hnsw)
     } else {
         let hnsw = Hnsw::generate(comparator, vecs, 24, 48, 12);
         HnswConfiguration::UnquantizedOpenAi(model, hnsw)
