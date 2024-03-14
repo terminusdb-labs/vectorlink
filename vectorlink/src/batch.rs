@@ -190,6 +190,7 @@ pub async fn index_using_operations_and_vectors<
     size: usize,
     id_offset: u64,
     quantize_hnsw: bool,
+    model: Model,
 ) -> Result<(), IndexingError> {
     // Start at last hnsw offset
     let mut progress_file_path: PathBuf = staging_path.as_ref().into();
@@ -265,10 +266,10 @@ pub async fn index_using_operations_and_vectors<
         };
         let c = comparator;
         let hnsw = QuantizedHnsw::new(number_of_vectors, cc, qc, c);
-        HnswConfiguration::QuantizedOpenAi(hnsw)
+        HnswConfiguration::QuantizedOpenAi(model, hnsw)
     } else {
         let hnsw = Hnsw::generate(comparator, vecs, 24, 48, 12);
-        HnswConfiguration::UnquantizedOpenAi(hnsw)
+        HnswConfiguration::UnquantizedOpenAi(model, hnsw)
     };
     eprintln!("done generating hnsw");
     hnsw.serialize(&staging_file)?;
@@ -339,6 +340,7 @@ pub async fn index_from_operations_file<P: AsRef<Path>>(
             size,
             id_offset,
             quantize_hnsw,
+            model,
         )
         .await?;
     } else {

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     comparator::{Centroid32Comparator, OpenAIComparator, QuantizedComparator},
+    openai::Model,
     vecmath::{CENTROID_32_LENGTH, EMBEDDING_LENGTH, QUANTIZED_EMBEDDING_LENGTH},
     vectors::VectorStore,
 };
@@ -22,10 +23,12 @@ pub struct HnswConfigurationState {
     version: usize,
     #[serde(rename = "type")]
     typ: HnswConfigurationType,
+    model: Model,
 }
 
 pub enum HnswConfiguration {
     QuantizedOpenAi(
+        Model,
         QuantizedHnsw<
             EMBEDDING_LENGTH,
             CENTROID_32_LENGTH,
@@ -35,18 +38,26 @@ pub enum HnswConfiguration {
             OpenAIComparator,
         >,
     ),
-    UnquantizedOpenAi(OpenAIHnsw),
+    UnquantizedOpenAi(Model, OpenAIHnsw),
 }
 
 impl HnswConfiguration {
     fn state(&self) -> HnswConfigurationState {
-        let typ = match self {
-            HnswConfiguration::QuantizedOpenAi(_) => HnswConfigurationType::QuantizedOpenAi,
-            HnswConfiguration::UnquantizedOpenAi(_) => HnswConfigurationType::UnquantizedOpenAi,
+        let (typ, model) = match self {
+            HnswConfiguration::QuantizedOpenAi(model, _) => {
+                (HnswConfigurationType::QuantizedOpenAi, model)
+            }
+            HnswConfiguration::UnquantizedOpenAi(model, _) => {
+                (HnswConfigurationType::UnquantizedOpenAi, model)
+            }
         };
         let version = 1;
 
-        HnswConfigurationState { version, typ }
+        HnswConfigurationState {
+            version,
+            typ,
+            model: *model,
+        }
     }
 }
 
@@ -58,10 +69,10 @@ impl Serializable for HnswConfiguration {
         path: P,
     ) -> Result<(), parallel_hnsw::SerializationError> {
         match self {
-            HnswConfiguration::QuantizedOpenAi(hnsw) => {
+            HnswConfiguration::QuantizedOpenAi(_, hnsw) => {
                 hnsw.serialize(&path)?;
             }
-            HnswConfiguration::UnquantizedOpenAi(qhnsw) => {
+            HnswConfiguration::UnquantizedOpenAi(_, qhnsw) => {
                 qhnsw.serialize(&path)?;
             }
         }
@@ -89,11 +100,12 @@ impl Serializable for HnswConfiguration {
         let state: HnswConfigurationState = serde_json::from_reader(&mut state_file)?;
 
         Ok(match state.typ {
-            HnswConfigurationType::QuantizedOpenAi => {
-                HnswConfiguration::QuantizedOpenAi(QuantizedHnsw::deserialize(path, params)?)
-            }
+            HnswConfigurationType::QuantizedOpenAi => HnswConfiguration::QuantizedOpenAi(
+                state.model,
+                QuantizedHnsw::deserialize(path, params)?,
+            ),
             HnswConfigurationType::UnquantizedOpenAi => {
-                HnswConfiguration::UnquantizedOpenAi(Hnsw::deserialize(path, params)?)
+                HnswConfiguration::UnquantizedOpenAi(state.model, Hnsw::deserialize(path, params)?)
             }
         })
     }
