@@ -56,6 +56,7 @@ use rayon::iter::Either;
 use rayon::prelude::*;
 
 use crate::configuration::OpenAIHnsw;
+use crate::vecmath::Quantized16Embedding;
 
 use {indexer::create_index_name, vecmath::empty_embedding, vectors::VectorStore};
 
@@ -604,6 +605,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
                 let fc = hnsw.full_comparator();
 
+                let errors = vec![0.0_f32; hnsw.vector_count()];
+
+                let mut offset = 0;
+                for chunk in fc.vector_chunks() {
+                    let len = chunk.len();
+                    let quantized_chunk = &cursor[..len];
+                    cursor = &cursor[len..];
+
+                    chunk
+                        .into_par_iter()
+                        .zip(quantized_chunk.into_par_iter())
+                        .map(|(full_vec, quantized_vec)| {
+                            let reconstructed = quantizer.reconstruct(quantized_vec);
+
+                            fc.compare_raw(&full_vec, &reconstructed)
+                        })
+                        .enumerate()
+                        .for_each(|(ix, distance)| unsafe {
+                            let ptr = errors.as_ptr().add(offset + ix) as *mut f32;
+                            *ptr = distance;
+                        });
+
+                    offset += len;
+                }
+
+                let sample_avg: f32 = errors.iter().sum::<f32>() / errors.len() as f32;
+                let sample_var = errors
+                    .iter()
+                    .map(|e| (e - sample_avg))
+                    .map(|x| x * x)
+                    .sum::<f32>()
+                    / errors.len() as f32;
+                let sample_deviation = sample_var.sqrt();
+
+                eprintln!("sample avg: {sample_avg}\nsample var: {sample_var}\nsample deviation: {sample_deviation}");
+            } else if let HnswConfiguration::SmallQuantizedOpenAi(_, hnsw) = hnsw {
+                let c = hnsw.quantized_comparator();
+                let quantized_vecs = c.data.read().unwrap();
+                let mut cursor: &[Quantized16Embedding] = &quantized_vecs;
+                let quantizer = hnsw.quantizer();
+                // sample_avg = sum(errors)/|errors|
+                // sample_var = sum((error - sample_avg)^2)/|errors|
+
+                let fc = hnsw.full_comparator();
+
                 let mut errors = vec![0.0_f32; hnsw.vector_count()];
 
                 let mut offset = 0;
@@ -616,13 +662,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         .into_par_iter()
                         .zip(quantized_chunk.into_par_iter())
                         .map(|(full_vec, quantized_vec)| {
-                            let reconstructed = quantizer.reconstruct(&quantized_vec);
+                            let reconstructed = quantizer.reconstruct(quantized_vec);
 
                             fc.compare_raw(&full_vec, &reconstructed)
                         })
                         .enumerate()
                         .for_each(|(ix, distance)| unsafe {
-                            let ptr = errors.as_ptr().offset((offset + ix) as isize) as *mut f32;
+                            let ptr = errors.as_ptr().add(offset + ix) as *mut f32;
                             *ptr = distance;
                         });
 
