@@ -16,6 +16,8 @@ mod server;
 mod vecmath;
 mod vectors;
 
+mod yale_er;
+
 use batch::index_from_operations_file;
 use clap::CommandFactory;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -221,6 +223,20 @@ enum Commands {
         domain: String,
         #[arg(short, long, default_value_t = 10000)]
         size: usize,
+    },
+    YaleEr {
+        #[arg(short, long, default_value_t = 8080)]
+        port: u16,
+        #[arg(short, long)]
+        directory: String,
+        #[arg(short, long)]
+        commit: String,
+        #[arg(long)]
+        domain: String,
+        #[arg(short, long, default_value_t = 10000)]
+        size: usize,
+        #[arg(short, long)]
+        key: Option<String>,
     },
 }
 
@@ -696,6 +712,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             } else {
                 panic!("not a pq hnsw index");
             }
+        }
+        Commands::YaleEr {
+            port,
+            directory,
+            commit,
+            domain,
+            size,
+            key,
+        } => {
+            let key = key_or_env(key);
+            yale_er::serve(port, &directory, &commit, &domain, size, &key)
+                .await
+                .unwrap()
         }
     }
 
