@@ -111,7 +111,7 @@ pub async fn serve(
     let hnsw_index_path = dbg!(format!(
         "{}/{}.hnsw",
         directory,
-        create_index_name(&domain, &commit)
+        create_index_name(domain, commit)
     ));
     let store = VectorStore::new(dirpath, size);
     let hnsw = HnswConfiguration::deserialize(&hnsw_index_path, Arc::new(store))?;
