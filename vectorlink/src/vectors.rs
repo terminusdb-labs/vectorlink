@@ -634,8 +634,9 @@ impl VectorStore {
     pub fn get_random_vectors(&self, domain: &Domain, count: usize) -> io::Result<Vec<Embedding>> {
         let mut rng = thread_rng();
         let total = domain.num_vecs();
+        let count = usize::min(total, count);
         let mut candidates: HashSet<usize> = HashSet::new();
-        assert!(total > count);
+        assert!(total >= count);
         loop {
             if candidates.len() == count {
                 break;
