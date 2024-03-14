@@ -75,7 +75,7 @@ pub async fn handle_request(
     let (embeddings, _) = openai::embeddings_for(
         &state.key,
         &[embedding_string.to_owned()],
-        openai::Model::Small3,
+        state.hnsw.model(),
     )
     .await?;
     let embedding = embeddings[0];

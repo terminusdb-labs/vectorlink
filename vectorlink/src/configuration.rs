@@ -59,6 +59,13 @@ impl HnswConfiguration {
             model: *model,
         }
     }
+
+    pub fn model(&self) -> Model {
+        match self {
+            HnswConfiguration::QuantizedOpenAi(m, _) => *m,
+            HnswConfiguration::UnquantizedOpenAi(m, _) => *m,
+        }
+    }
 }
 
 impl Serializable for HnswConfiguration {
