@@ -362,23 +362,14 @@ where
 
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
         let mut partial_distances = [0.0_f32; QUANTIZED_32_EMBEDDING_LENGTH];
-        let mut partial_norms1 = [0.0_f32; QUANTIZED_32_EMBEDDING_LENGTH];
-        let mut partial_norms2 = [0.0_f32; QUANTIZED_32_EMBEDDING_LENGTH];
         for ix in 0..48 {
             let partial_1 = v1[ix];
             let partial_2 = v2[ix];
             let partial_distance = self.cc.partial_distance(partial_1, partial_2);
-            let partial_norm1 = self.cc.partial_distance(partial_1, partial_1);
-            let partial_norm2 = self.cc.partial_distance(partial_2, partial_2);
             partial_distances[ix] = partial_distance;
-            partial_norms1[ix] = partial_norm1;
-            partial_norms2[ix] = partial_norm2;
         }
-        let res = vecmath::sum_48(&partial_distances);
-        let norm1 = vecmath::sum_48(&partial_norms1);
-        let norm2 = vecmath::sum_48(&partial_norms2);
-        let dist = res / (norm1 * norm2);
-        clamp_01((dist - 1_f32) / -2_f32)
+
+        clamp_01((vecmath::sum_48(&partial_distances) - 1_f32) / -2_f32)
     }
 }
 
@@ -474,24 +465,14 @@ where
 
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
         let mut partial_distances = [0.0_f32; QUANTIZED_16_EMBEDDING_LENGTH];
-        let mut partial_norms1 = [0.0_f32; QUANTIZED_16_EMBEDDING_LENGTH];
-        let mut partial_norms2 = [0.0_f32; QUANTIZED_16_EMBEDDING_LENGTH];
         for ix in 0..QUANTIZED_16_EMBEDDING_LENGTH {
             let partial_1 = v1[ix];
             let partial_2 = v2[ix];
             let partial_distance = self.cc.partial_distance(partial_1, partial_2);
-            let partial_norm1 = self.cc.partial_distance(partial_1, partial_1);
-            let partial_norm2 = self.cc.partial_distance(partial_2, partial_2);
-
             partial_distances[ix] = partial_distance;
-            partial_norms1[ix] = partial_norm1;
-            partial_norms2[ix] = partial_norm2;
         }
-        let res = vecmath::sum_96(&partial_distances);
-        let norm1 = vecmath::sum_96(&partial_norms1);
-        let norm2 = vecmath::sum_96(&partial_norms2);
-        let dist = res / (norm1 * norm2);
-        clamp_01((dist - 1_f32) / -2_f32)
+
+        vecmath::sum_96(&partial_distances).sqrt()
     }
 }
 
