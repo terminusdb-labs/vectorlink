@@ -542,7 +542,8 @@ impl<T, I: Iterator<Item = T>> Iterator for ChunkedVecIterator<T, I> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut chunk = Vec::with_capacity(1_000_000);
-        while let Some(item) = self.iter.next() {
+
+        for item in self.iter.by_ref() {
             chunk.push(item);
             if chunk.len() == 16_384 {
                 break;
