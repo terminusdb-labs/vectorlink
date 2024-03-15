@@ -125,7 +125,7 @@ impl MemoizedPartialDistances16 {
         for c in 0..size * size {
             let i = c / size;
             let j = c % size;
-            partial_distances[c] = vecmath::cosine_partial_distance_16(&vectors[i], &vectors[j]);
+            partial_distances[c] = vecmath::euclidean_partial_distance_16(&vectors[i], &vectors[j]);
         }
 
         Self {
@@ -369,7 +369,7 @@ where
             partial_distances[ix] = partial_distance;
         }
 
-        (vecmath::sum_48(&partial_distances) - 1) / -2
+        vecmath::sum_48(&partial_distances).sqrt()
     }
 }
 
