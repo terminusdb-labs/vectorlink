@@ -241,7 +241,9 @@ pub mod simd {
         let mut sum = <f32x16>::from_slice(&array[..16]);
         sum += <f32x16>::from_slice(&array[16..32]);
         sum += <f32x16>::from_slice(&array[32..48]);
-        sum += <f32x16>::from_slice(&array[48..96]);
+        sum += <f32x16>::from_slice(&array[48..64]);
+        sum += <f32x16>::from_slice(&array[48..80]);
+        sum += <f32x16>::from_slice(&array[80..96]);
 
         sum.reduce_sum()
     }

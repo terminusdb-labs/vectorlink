@@ -362,7 +362,7 @@ where
 
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
         let mut partial_distances = [0.0_f32; QUANTIZED_32_EMBEDDING_LENGTH];
-        for ix in 0..48 {
+        for ix in 0..QUANTIZED_32_EMBEDDING_LENGTH {
             let partial_1 = v1[ix];
             let partial_2 = v2[ix];
             let partial_distance = self.cc.partial_distance(partial_1, partial_2);
