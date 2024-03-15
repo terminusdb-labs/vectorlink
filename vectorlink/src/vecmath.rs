@@ -126,7 +126,7 @@ pub fn cosine_partial_distance_32(v1: &Centroid32, v2: &Centroid32) -> f32 {
     simd::cosine_partial_distance_32_simd(v1, v2)
 }
 
-pub fn cosine_partial_distance_16(v1: &Centroid16, v2: &Centroid16) -> f32 {
+pub fn cosine_partial_distance_16(v1: &Centroid32, v2: &Centroid32) -> f32 {
     simd::cosine_partial_distance_16_simd(v1, v2)
 }
 

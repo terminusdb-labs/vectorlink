@@ -369,7 +369,7 @@ where
             partial_distances[ix] = partial_distance;
         }
 
-        (vecmath::sum_48(&partial_distances) - 1_f32) / -2_f32
+        (vecmath::sum_48(&partial_distances) - 1) / -2
     }
 }
 
