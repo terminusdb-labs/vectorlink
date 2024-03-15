@@ -582,6 +582,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
                 let mut offset = 0;
                 for chunk in fc.vector_chunks() {
+                    if offset == 0 {
+                        // first iteration let's print some extra things
+                        let first_vec = &chunk[0];
+                        let first_quantized_vec = &cursor[0];
+                        let first_reconstructed_vec = quantizer.reconstruct(first_quantized_vec);
+                        for (f1, f2) in first_vec.iter().zip(first_reconstructed_vec.iter()) {
+                            let distance = (f1 - f2).abs();
+                            eprintln!(" {f1} {f2} ({distance})");
+                        }
+                    }
                     let len = chunk.len();
                     let quantized_chunk = &cursor[..len];
                     cursor = &cursor[len..];
