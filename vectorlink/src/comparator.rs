@@ -211,7 +211,7 @@ impl Serializable for Centroid32Comparator {
 impl parallel_hnsw::pq::VectorStore for Centroid32Comparator {
     type T = <Centroid32Comparator as Comparator>::T;
 
-    fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
+    fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
         let mut data = self.centroids.write().unwrap();
         let vid = data.len();
         let mut vectors: Vec<VectorId> = Vec::new();
@@ -228,20 +228,17 @@ impl parallel_hnsw::pq::VectorStore for Centroid32Comparator {
 
 #[derive(Clone, Default)]
 pub struct Centroid16Comparator {
-    distances: Arc<RwLock<MemoizedPartialDistances16>>,
-    centroids: Arc<RwLock<Vec<Centroid16>>>,
+    distances: Arc<MemoizedPartialDistances16>,
+    centroids: Arc<Vec<Centroid16>>,
 }
 
 impl Comparator for Centroid16Comparator {
     type T = Centroid16;
 
-    type Borrowable<'a> = ReadLockedVec<'a, Centroid16>;
+    type Borrowable<'a> = &'a Centroid16;
 
     fn lookup(&self, v: VectorId) -> Self::Borrowable<'_> {
-        ReadLockedVec {
-            lock: self.centroids.read().unwrap(),
-            id: v,
-        }
+        &self.centroids[v.0]
     }
 
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
@@ -251,7 +248,7 @@ impl Comparator for Centroid16Comparator {
 
 impl PartialDistance for Centroid16Comparator {
     fn partial_distance(&self, i: u16, j: u16) -> f32 {
-        self.distances.read().unwrap().partial_distance(i, j)
+        self.distances.partial_distance(i, j)
     }
 }
 
@@ -259,8 +256,8 @@ impl Serializable for Centroid16Comparator {
     type Params = ();
 
     fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
-        let centroids = self.centroids.read().unwrap();
-        let len = centroids.len();
+        let centroids = &self.centroids;
+        let len = self.centroids.len();
         let buf: &[u8] = unsafe {
             std::slice::from_raw_parts(
                 centroids.as_ptr() as *const u8,
@@ -284,8 +281,8 @@ impl Serializable for Centroid16Comparator {
         file.read_exact(buf)?;
 
         Ok(Self {
-            distances: Arc::new(RwLock::new(MemoizedPartialDistances16::new(&vec))),
-            centroids: Arc::new(RwLock::new(vec)),
+            distances: Arc::new(MemoizedPartialDistances16::new(&vec)),
+            centroids: Arc::new(vec),
         })
     }
 }
@@ -293,17 +290,17 @@ impl Serializable for Centroid16Comparator {
 impl parallel_hnsw::pq::VectorStore for Centroid16Comparator {
     type T = <Centroid16Comparator as Comparator>::T;
 
-    fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
-        let mut data = self.centroids.write().unwrap();
-        let vid = data.len();
+    fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
+        let mut data = (*self.centroids).clone();
+        let vid = self.centroids.len();
         let mut vectors: Vec<VectorId> = Vec::new();
         data.extend(i.enumerate().map(|(i, v)| {
             vectors.push(VectorId(vid + i));
             v
         }));
         let distances = MemoizedPartialDistances16::new(&data);
-        let mut dist = self.distances.write().unwrap();
-        *dist = distances;
+        let dist = &mut self.distances;
+        *dist = distances.into();
         vectors
     }
 }
@@ -417,7 +414,7 @@ impl Serializable for Quantized32Comparator {
 impl pq::VectorStore for Quantized32Comparator {
     type T = <Quantized32Comparator as Comparator>::T;
 
-    fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
+    fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
         let mut data = self.data.write().unwrap();
         let vid = data.len();
         let mut vectors: Vec<VectorId> = Vec::new();
@@ -520,7 +517,7 @@ impl Serializable for Quantized16Comparator {
 impl pq::VectorStore for Quantized16Comparator {
     type T = <Quantized16Comparator as Comparator>::T;
 
-    fn store(&self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
+    fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
         let mut data = self.data.write().unwrap();
         let vid = data.len();
         let mut vectors: Vec<VectorId> = Vec::new();
@@ -562,7 +559,7 @@ impl<T, I: Iterator<Item = T>> Iterator for ChunkedVecIterator<T, I> {
 mod tests {
     use std::sync::{Arc, RwLock};
 
-    use parallel_hnsw::{bigvec::random_normed_vec, AbstractVector};
+    use parallel_hnsw::AbstractVector;
 
     use crate::comparator::Centroid32Comparator;
     use crate::comparator::Comparator;
