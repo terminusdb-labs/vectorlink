@@ -299,6 +299,7 @@ impl parallel_hnsw::pq::VectorStore for Centroid16Comparator {
             v
         }));
         let distances = MemoizedPartialDistances16::new(&data);
+        eprintln!("Length of data: {}", &data.len());
         self.centroids = Arc::new(data);
         eprintln!("Length of distances: {}", &distances.all_distances().len());
         self.distances = Arc::new(distances);
