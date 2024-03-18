@@ -327,7 +327,7 @@ pub async fn index_from_operations_file<P: AsRef<Path>>(
         id_offset = extend_vector_store(domain, &vectorlink_path, vector_path, size).await? as u64;
         extended_file.write_u64(id_offset).await?;
     } else {
-        eprintln!("Already concantenated");
+        eprintln!("Already concatenated");
         id_offset = extended_file.read_u64().await?;
     }
 
