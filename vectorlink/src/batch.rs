@@ -24,7 +24,7 @@ use crate::{
     indexer::{create_index_name, index_serialization_path},
     openai::{embeddings_for, EmbeddingError, Model},
     server::Operation,
-    vecmath::Embedding,
+    vecmath::{Embedding, CENTROID_16_LENGTH, EMBEDDING_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH},
     vectors::VectorStore,
 };
 
@@ -258,13 +258,15 @@ pub async fn index_using_operations_and_vectors<
     eprintln!("ready to generate hnsw");
     let hnsw = if quantize_hnsw {
         let number_of_vectors = NUMBER_OF_CENTROIDS / 10;
-        let cc = Centroid16Comparator::default();
-        let qc = Quantized16Comparator {
-            cc: cc.clone(),
-            data: Default::default(),
-        };
         let c = comparator;
-        let hnsw = QuantizedHnsw::new(number_of_vectors, cc, qc, c);
+        let hnsw: QuantizedHnsw<
+            EMBEDDING_LENGTH,
+            CENTROID_16_LENGTH,
+            QUANTIZED_16_EMBEDDING_LENGTH,
+            Centroid16Comparator,
+            Quantized16Comparator,
+            OpenAIComparator,
+        > = QuantizedHnsw::new(number_of_vectors, c);
         HnswConfiguration::SmallQuantizedOpenAi(model, hnsw)
     } else {
         let hnsw = Hnsw::generate(comparator, vecs, 24, 48, 12);
