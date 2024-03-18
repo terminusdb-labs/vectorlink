@@ -82,7 +82,6 @@ impl Serializable for OpenAIComparator {
     }
 }
 
-#[derive(Default)]
 struct MemoizedPartialDistances32 {
     partial_distances: Vec<f32>,
     size: usize,
@@ -114,7 +113,6 @@ impl MemoizedPartialDistances32 {
     }
 }
 
-#[derive(Default)]
 struct MemoizedPartialDistances16 {
     partial_distances: Vec<f32>,
     size: usize,
@@ -146,7 +144,7 @@ impl MemoizedPartialDistances16 {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Centroid32Comparator {
     distances: Arc<RwLock<MemoizedPartialDistances32>>,
     centroids: Arc<Vec<Centroid32>>,
@@ -155,7 +153,7 @@ pub struct Centroid32Comparator {
 impl CentroidComparatorConstructor for Centroid32Comparator {
     fn new(centroids: Vec<Self::T>) -> Self {
         Self {
-            distances: Default::default(),
+            distances: Arc::new(RwLock::new(MemoizedPartialDistances32::new(&centroids))),
             centroids: Arc::new(centroids),
         }
     }
@@ -215,7 +213,7 @@ impl Serializable for Centroid32Comparator {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Centroid16Comparator {
     distances: Arc<MemoizedPartialDistances16>,
     centroids: Arc<Vec<Centroid16>>,
@@ -224,7 +222,7 @@ pub struct Centroid16Comparator {
 impl CentroidComparatorConstructor for Centroid16Comparator {
     fn new(centroids: Vec<Self::T>) -> Self {
         Self {
-            distances: Default::default(),
+            distances: Arc::new(MemoizedPartialDistances16::new(&centroids)),
             centroids: Arc::new(centroids),
         }
     }
@@ -322,7 +320,7 @@ impl QuantizedComparatorConstructor for Quantized32Comparator {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Quantized16Comparator {
     pub cc: Centroid16Comparator,
     pub data: Arc<RwLock<Vec<Quantized16Embedding>>>,
