@@ -301,6 +301,8 @@ impl parallel_hnsw::pq::VectorStore for Centroid16Comparator {
         let distances = MemoizedPartialDistances16::new(&data);
         let dist = &mut self.distances;
         *dist = distances.into();
+        let len = data.len();
+        eprintln!("Stored {len} vectors");
         vectors
     }
 }
