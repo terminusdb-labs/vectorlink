@@ -300,8 +300,7 @@ impl parallel_hnsw::pq::VectorStore for Centroid16Comparator {
         }));
         let distances = MemoizedPartialDistances16::new(&data);
         self.centroids = Arc::new(data);
-        let dist = &mut self.distances;
-        *dist = distances.into();
+        self.distances = Arc::new(distances);
         vectors
     }
 }
