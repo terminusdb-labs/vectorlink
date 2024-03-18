@@ -106,7 +106,7 @@ pub fn normalized_cosine_distance_32_scalar(v1: &Centroid32, v2: &Centroid32) ->
 
 pub use simd::normalized_cosine_distance_32_simd;
 
-use crate::comparator::PartialDistanceCalculator;
+use crate::comparator::DistanceCalculator;
 
 pub fn euclidean_distance_32(v1: &Centroid32, v2: &Centroid32) -> f32 {
     simd::euclidean_distance_32_simd(v1, v2)
@@ -128,21 +128,43 @@ pub fn cosine_partial_distance_32(v1: &Centroid32, v2: &Centroid32) -> f32 {
     simd::cosine_partial_distance_32_simd(v1, v2)
 }
 
-pub struct EuclideanPartialDistance32;
-impl PartialDistanceCalculator for EuclideanPartialDistance32 {
+#[derive(Default)]
+pub struct EuclideanDistance32;
+impl DistanceCalculator for EuclideanDistance32 {
     type T = Centroid32;
 
     fn partial_distance(&self, left: &Self::T, right: &Self::T) -> f32 {
         euclidean_partial_distance_32(left, right)
     }
+
+    fn finalize_partial_distance(&self, distance: f32) -> f32 {
+        distance.sqrt()
+    }
+
+    fn aggregate_partial_distances(&self, distances: &[f32]) -> f32 {
+        assert!(distances.len() == QUANTIZED_32_EMBEDDING_LENGTH);
+        let cast = unsafe { &*(distances.as_ptr() as *const [f32; QUANTIZED_32_EMBEDDING_LENGTH]) };
+        simd::sum_48(cast).sqrt()
+    }
 }
 
-pub struct EuclideanPartialDistance16;
-impl PartialDistanceCalculator for EuclideanPartialDistance16 {
+#[derive(Default)]
+pub struct EuclideanDistance16;
+impl DistanceCalculator for EuclideanDistance16 {
     type T = Centroid16;
 
     fn partial_distance(&self, left: &Self::T, right: &Self::T) -> f32 {
         euclidean_partial_distance_16(left, right)
+    }
+
+    fn finalize_partial_distance(&self, distance: f32) -> f32 {
+        distance.sqrt()
+    }
+
+    fn aggregate_partial_distances(&self, distances: &[f32]) -> f32 {
+        assert!(distances.len() == QUANTIZED_16_EMBEDDING_LENGTH);
+        let cast = unsafe { &*(distances.as_ptr() as *const [f32; QUANTIZED_16_EMBEDDING_LENGTH]) };
+        simd::sum_96(cast).sqrt()
     }
 }
 

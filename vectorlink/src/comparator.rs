@@ -14,9 +14,9 @@ use std::{path::Path, sync::Arc};
 use parallel_hnsw::{pq, Comparator, Serializable, SerializationError, VectorId};
 
 use crate::vecmath::{
-    self, Centroid16, Centroid32, EuclideanPartialDistance16, EuclideanPartialDistance32,
-    Quantized16Embedding, Quantized32Embedding, CENTROID_16_BYTE_LENGTH, CENTROID_32_BYTE_LENGTH,
-    QUANTIZED_16_EMBEDDING_LENGTH, QUANTIZED_32_EMBEDDING_LENGTH,
+    self, EuclideanDistance16, EuclideanDistance32, Quantized16Embedding, Quantized32Embedding,
+    CENTROID_16_LENGTH, CENTROID_32_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH,
+    QUANTIZED_32_EMBEDDING_LENGTH,
 };
 use crate::vectors::LoadedVec;
 use crate::{
@@ -87,16 +87,19 @@ struct MemoizedPartialDistances {
     size: usize,
 }
 
-pub trait PartialDistanceCalculator {
+pub trait DistanceCalculator {
     type T;
     fn partial_distance(&self, left: &Self::T, right: &Self::T) -> f32;
+    fn finalize_partial_distance(&self, distance: f32) -> f32;
+    fn aggregate_partial_distances(&self, distances: &[f32]) -> f32;
+
+    fn distance(&self, left: &Self::T, right: &Self::T) -> f32 {
+        self.finalize_partial_distance(self.partial_distance(left, right))
+    }
 }
 
 impl MemoizedPartialDistances {
-    fn new<T, P: PartialDistanceCalculator<T = T>>(
-        partial_distance_calculator: P,
-        vectors: &[T],
-    ) -> Self {
+    fn new<T, P: DistanceCalculator<T = T>>(partial_distance_calculator: P, vectors: &[T]) -> Self {
         let size = vectors.len();
         let mut partial_distances: Vec<f32> = vec![0.0; size * size];
         for c in 0..size * size {
@@ -123,120 +126,64 @@ impl MemoizedPartialDistances {
     }
 }
 
-#[derive(Clone)]
-pub struct Centroid32Comparator {
-    distances: Arc<RwLock<MemoizedPartialDistances>>,
-    centroids: Arc<Vec<Centroid32>>,
-}
-
-impl CentroidComparatorConstructor for Centroid32Comparator {
-    fn new(centroids: Vec<Self::T>) -> Self {
-        Self {
-            distances: Arc::new(RwLock::new(MemoizedPartialDistances::new(
-                EuclideanPartialDistance32,
-                &centroids,
-            ))),
-            centroids: Arc::new(centroids),
-        }
-    }
-}
-
-impl Comparator for Centroid32Comparator {
-    type T = Centroid32;
-
-    type Borrowable<'a> = &'a Self::T;
-
-    fn lookup(&self, v: VectorId) -> Self::Borrowable<'_> {
-        &self.centroids[v.0]
-    }
-
-    fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
-        vecmath::euclidean_distance_32(v1, v2)
-    }
-}
-
-impl PartialDistance for Centroid32Comparator {
-    fn partial_distance(&self, i: u16, j: u16) -> f32 {
-        self.distances.read().unwrap().partial_distance(i, j)
-    }
-}
-
-impl Serializable for Centroid32Comparator {
-    type Params = ();
-
-    fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
-        let len = self.centroids.len();
-        let buf: &[u8] = unsafe {
-            std::slice::from_raw_parts(
-                self.centroids.as_ptr() as *const u8,
-                len * std::mem::size_of::<Centroid32>(),
-            )
-        };
-        std::fs::write(path, buf)?;
-        Ok(())
-    }
-
-    fn deserialize<P: AsRef<Path>>(
-        path: P,
-        _params: Self::Params,
-    ) -> Result<Self, SerializationError> {
-        let size = std::fs::metadata(&path)?.size() as usize;
-        assert_eq!(0, size % CENTROID_32_BYTE_LENGTH);
-        let number_of_centroids = size / CENTROID_32_BYTE_LENGTH;
-        let mut vec = vec![Centroid32::default(); number_of_centroids];
-        let mut file = std::fs::File::open(&path)?;
-        let buf = unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr() as *mut u8, size) };
-        file.read_exact(buf)?;
-
-        Ok(Self {
-            distances: Arc::new(RwLock::new(MemoizedPartialDistances::new(
-                EuclideanPartialDistance32,
-                &vec,
-            ))),
-            centroids: Arc::new(vec),
-        })
-    }
-}
-
-#[derive(Clone)]
-pub struct Centroid16Comparator {
+pub struct ArrayCentroidComparator<const N: usize, C> {
     distances: Arc<MemoizedPartialDistances>,
-    centroids: Arc<Vec<Centroid16>>,
+    centroids: Arc<Vec<[f32; N]>>,
+    calculator: PhantomData<C>,
 }
 
-impl CentroidComparatorConstructor for Centroid16Comparator {
+impl<const N: usize, C> Clone for ArrayCentroidComparator<N, C> {
+    fn clone(&self) -> Self {
+        Self {
+            distances: self.distances.clone(),
+            centroids: self.centroids.clone(),
+            calculator: PhantomData,
+        }
+    }
+}
+unsafe impl<const N: usize, C> Sync for ArrayCentroidComparator<N, C> {}
+
+pub type Centroid16Comparator = ArrayCentroidComparator<CENTROID_16_LENGTH, EuclideanDistance16>;
+pub type Centroid32Comparator = ArrayCentroidComparator<CENTROID_32_LENGTH, EuclideanDistance32>;
+
+impl<const SIZE: usize, C: DistanceCalculator<T = [f32; SIZE]> + Default>
+    CentroidComparatorConstructor for ArrayCentroidComparator<SIZE, C>
+{
     fn new(centroids: Vec<Self::T>) -> Self {
         Self {
-            distances: Arc::new(MemoizedPartialDistances::new(
-                EuclideanPartialDistance16,
-                &centroids,
-            )),
+            distances: Arc::new(MemoizedPartialDistances::new(C::default(), &centroids)),
             centroids: Arc::new(centroids),
+            calculator: PhantomData,
         }
     }
 }
 
-impl Comparator for Centroid16Comparator {
-    type T = Centroid16;
+impl<const SIZE: usize, C: DistanceCalculator<T = [f32; SIZE]> + Default> Comparator
+    for ArrayCentroidComparator<SIZE, C>
+{
+    type T = [f32; SIZE];
 
-    type Borrowable<'a> = &'a Centroid16;
+    type Borrowable<'a> = &'a Self::T where C: 'a;
 
     fn lookup(&self, v: VectorId) -> Self::Borrowable<'_> {
         &self.centroids[v.0]
     }
 
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
-        vecmath::euclidean_distance_16(v1, v2)
+        let calculator = C::default();
+        calculator.distance(v1, v2)
     }
 }
 
-impl PartialDistance for Centroid16Comparator {
+impl<const N: usize, C> PartialDistance for ArrayCentroidComparator<N, C> {
     fn partial_distance(&self, i: u16, j: u16) -> f32 {
         self.distances.partial_distance(i, j)
     }
 }
 
-impl Serializable for Centroid16Comparator {
+impl<const N: usize, C: DistanceCalculator<T = [f32; N]> + Default> Serializable
+    for ArrayCentroidComparator<N, C>
+{
     type Params = ();
 
     fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
@@ -245,7 +192,7 @@ impl Serializable for Centroid16Comparator {
         let buf: &[u8] = unsafe {
             std::slice::from_raw_parts(
                 centroids.as_ptr() as *const u8,
-                len * std::mem::size_of::<Centroid16>(),
+                len * std::mem::size_of::<[f32; N]>(),
             )
         };
         std::fs::write(path, buf)?;
@@ -257,19 +204,18 @@ impl Serializable for Centroid16Comparator {
         _params: Self::Params,
     ) -> Result<Self, SerializationError> {
         let size = std::fs::metadata(&path)?.size() as usize;
-        assert_eq!(0, size % CENTROID_16_BYTE_LENGTH);
-        let number_of_centroids = size / CENTROID_16_BYTE_LENGTH;
-        let mut vec = vec![Centroid16::default(); number_of_centroids];
+        let centroid_byte_len = std::mem::size_of::<[f32; N]>();
+        assert_eq!(0, size % centroid_byte_len);
+        let number_of_centroids = size / centroid_byte_len;
+        let mut vec = vec![[0.0; N]; number_of_centroids];
         let mut file = std::fs::File::open(&path)?;
         let buf = unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr() as *mut u8, size) };
         file.read_exact(buf)?;
 
         Ok(Self {
-            distances: Arc::new(MemoizedPartialDistances::new(
-                EuclideanPartialDistance16,
-                &vec,
-            )),
+            distances: Arc::new(MemoizedPartialDistances::new(C::default(), &vec)),
             centroids: Arc::new(vec),
+            calculator: PhantomData,
         })
     }
 }
