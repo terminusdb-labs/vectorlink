@@ -106,6 +106,8 @@ pub fn normalized_cosine_distance_32_scalar(v1: &Centroid32, v2: &Centroid32) ->
 
 pub use simd::normalized_cosine_distance_32_simd;
 
+use crate::comparator::PartialDistanceCalculator;
+
 pub fn euclidean_distance_32(v1: &Centroid32, v2: &Centroid32) -> f32 {
     simd::euclidean_distance_32_simd(v1, v2)
 }
@@ -124,6 +126,24 @@ pub fn euclidean_partial_distance_16(v1: &Centroid16, v2: &Centroid16) -> f32 {
 
 pub fn cosine_partial_distance_32(v1: &Centroid32, v2: &Centroid32) -> f32 {
     simd::cosine_partial_distance_32_simd(v1, v2)
+}
+
+pub struct EuclideanPartialDistance32;
+impl PartialDistanceCalculator for EuclideanPartialDistance32 {
+    type T = Centroid32;
+
+    fn partial_distance(&self, left: &Self::T, right: &Self::T) -> f32 {
+        euclidean_partial_distance_32(left, right)
+    }
+}
+
+pub struct EuclideanPartialDistance16;
+impl PartialDistanceCalculator for EuclideanPartialDistance16 {
+    type T = Centroid16;
+
+    fn partial_distance(&self, left: &Self::T, right: &Self::T) -> f32 {
+        euclidean_partial_distance_16(left, right)
+    }
 }
 
 pub fn normalize_vec(vec: &mut Embedding) {
