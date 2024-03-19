@@ -596,6 +596,7 @@ impl<T, I: Iterator<Item = T>> Iterator for ChunkedVecIterator<T, I> {
 mod tests {
     use std::sync::{Arc, RwLock};
 
+    use parallel_hnsw::pq::CentroidComparatorConstructor;
     use parallel_hnsw::AbstractVector;
 
     use crate::comparator::Centroid32Comparator;
@@ -612,13 +613,7 @@ mod tests {
             })
             .collect();
          */
-        let vectors = Vec::new();
-        let distances = Arc::new(RwLock::new(MemoizedPartialDistances::new(&vectors)));
-        let centroids = Arc::new(vectors);
-        let cc = Centroid32Comparator {
-            distances,
-            centroids,
-        };
+        let cc = Centroid32Comparator::new(Vec::new());
         let mut v1 = [0.0_f32; 32];
         v1[0] = 1.0;
         v1[1] = 1.0;
