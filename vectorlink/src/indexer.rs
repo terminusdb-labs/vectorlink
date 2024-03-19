@@ -1,6 +1,7 @@
 #![allow(unused, dead_code)]
 use crate::{
     comparator::OpenAIComparator,
+    configuration::OpenAIHnsw,
     openai::{embeddings_for, EmbeddingError, Model},
     server::Operation,
     vecmath::{self, Embedding},
@@ -20,7 +21,6 @@ use thiserror::Error;
 use tokio::task::JoinError;
 use urlencoding::{decode, encode};
 
-pub type HnswIndex = Hnsw<OpenAIComparator>;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -115,9 +115,9 @@ pub enum IndexError {
 }
 
 pub fn start_indexing_from_operations(
-    hnsw: Arc<HnswIndex>,
+    hnsw: Arc<OpenAIHnsw>,
     operations: Vec<PointOperation>,
-) -> Result<Arc<HnswIndex>, io::Error> {
+) -> Result<Arc<OpenAIHnsw>, io::Error> {
     todo!()
     /*
     let mut searcher = Searcher::default();
@@ -158,7 +158,7 @@ impl PointQuery {
     }
 }
 
-pub fn search(p: &Point, mut num: usize, hnsw: &HnswIndex) -> Vec<PointQuery> {
+pub fn search(p: &Point, mut num: usize, hnsw: &OpenAIHnsw) -> Vec<PointQuery> {
     let ef = num.max(100);
     let output = hnsw.search(p.abstract_vector(), ef, 2);
     let points = output
@@ -177,13 +177,6 @@ pub fn index_serialization_path<P: AsRef<Path>>(path: P, name: &str) -> PathBuf 
     path
 }
 
-pub fn serialize_index<P: AsRef<Path>>(
-    filename: P,
-    hnsw: &HnswIndex,
-) -> Result<(), SerializationError> {
-    hnsw.serialize(filename)
-}
-
 pub fn create_index_name(domain: &str, commit: &str) -> String {
     let domain = encode(domain);
     format!("{}@{}", domain, commit)
@@ -193,13 +186,6 @@ pub fn parse_index_name(name: &str) -> (String, String) {
     let (domain, commit) = name.split_once('@').unwrap();
     let domain = decode(domain).unwrap();
     (domain.to_string(), commit.to_string())
-}
-
-pub fn deserialize_index<P: AsRef<Path>>(
-    path: P,
-    vs: Arc<VectorStore>,
-) -> Result<Option<HnswIndex>, SerializationError> {
-    Hnsw::deserialize(path, vs)
 }
 
 #[cfg(test)]

@@ -1,6 +1,5 @@
 #![feature(portable_simd)]
 
-use std::collections::HashSet;
 use std::io::Read;
 use std::io::Write;
 use std::path::Path;
@@ -8,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 mod batch;
 mod comparator;
+mod configuration;
 mod indexer;
 mod openai;
 mod server;
@@ -15,28 +15,31 @@ mod store;
 mod vecmath;
 mod vectors;
 
+mod search_server;
+
 use batch::index_from_operations_file;
 use clap::CommandFactory;
 use clap::{Parser, Subcommand, ValueEnum};
+use configuration::HnswConfiguration;
 //use hnsw::Hnsw;
 use openai::Model;
-use parallel_hnsw::{AbstractVector, NodeDistance, NodeId, VectorId};
-use rand::*;
+use parallel_hnsw::pq::Quantizer;
+use parallel_hnsw::pq::VectorSelector;
+use parallel_hnsw::AbstractVector;
+use parallel_hnsw::Comparator;
+use parallel_hnsw::Serializable;
 use std::fs::File;
 use std::io;
+use vecmath::Quantized32Embedding;
 use vecmath::EMBEDDING_BYTE_LENGTH;
 use vecmath::EMBEDDING_LENGTH;
 
 use rayon::iter::Either;
 use rayon::prelude::*;
 
-use crate::indexer::deserialize_index;
+use crate::vecmath::Quantized16Embedding;
 
-use {
-    indexer::{create_index_name, HnswIndex},
-    vecmath::empty_embedding,
-    vectors::VectorStore,
-};
+use {indexer::create_index_name, vecmath::empty_embedding, vectors::VectorStore};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -60,20 +63,6 @@ enum Commands {
         size: usize,
     },
     Load {
-        #[arg(short, long)]
-        key: Option<String>,
-        #[arg(short, long)]
-        commit: String,
-        #[arg(long)]
-        domain: String,
-        #[arg(short, long)]
-        directory: String,
-        #[arg(short, long)]
-        input: String,
-        #[arg(short, long, default_value_t = 10000)]
-        size: usize,
-    },
-    Load2 {
         #[arg(short, long)]
         key: Option<String>,
         #[arg(short, long)]
@@ -142,18 +131,8 @@ enum Commands {
         directory: String,
         #[arg(short, long, default_value_t = 10000)]
         size: usize,
-    },
-    Diagnostics {
-        #[arg(short, long)]
-        commit: String,
-        #[arg(long)]
-        domain: String,
-        #[arg(short, long)]
-        directory: String,
-        #[arg(short, long, default_value_t = 10000)]
-        size: usize,
-        #[arg(short, long, default_value_t = 0)]
-        layer: usize,
+        #[arg(short, long, default_value_t = 0.001)]
+        recall_proportion: f32,
     },
     Duplicates {
         #[arg(short, long)]
@@ -204,6 +183,32 @@ enum Commands {
         size: usize,
         #[arg(short, long, default_value_t = 1.0_f32)]
         threshold: f32,
+    },
+    TestQuantization {
+        #[arg(short, long)]
+        directory: String,
+        #[arg(short, long)]
+        commit: String,
+        #[arg(long)]
+        domain: String,
+        #[arg(short, long, default_value_t = 10000)]
+        size: usize,
+    },
+    SearchServer {
+        #[arg(short, long, default_value_t = 8080)]
+        port: u16,
+        #[arg(short, long)]
+        operations_file: String,
+        #[arg(short, long)]
+        directory: String,
+        #[arg(short, long)]
+        commit: String,
+        #[arg(long)]
+        domain: String,
+        #[arg(short, long, default_value_t = 10000)]
+        size: usize,
+        #[arg(short, long)]
+        key: Option<String>,
     },
 }
 
@@ -322,42 +327,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             eprintln!("{}", distance);
         }
         Commands::Load {
-            directory, input, ..
-        } => {
-            let _path = Path::new(&input);
-            let _dirpath = Path::new(&directory);
-            panic!("yikes!");
-            /*
-            let mut hnsw: HnswIndex<OpenAIComparator, = Hnsw::new(OpenAI);
-            let store = VectorStore::new(dirpath, size);
-            let resolved_domain = store.get_domain(&domain)?;
-
-            let f = File::options().read(true).open(path)?;
-
-            let lines = io::BufReader::new(f).lines();
-            let opstream = &lines
-                .map(|l| {
-                    let ro: io::Result<Operation> = serde_json::from_str(&l.unwrap())
-                        .map_err(|e| std::io::Error::new(ErrorKind::Other, e));
-                    ro
-                })
-                .chunks(100);
-
-            let key = key_or_env(key);
-            for structs in opstream {
-                let structs: Vec<_> = structs.collect();
-                let new_ops =
-                    operations_to_point_operations(&resolved_domain, &store, structs, &key)
-                        .await?
-                        .0;
-                hnsw = start_indexing_from_operations(hnsw, new_ops).unwrap();
-            }
-            let index_id = create_index_name(&domain, &commit);
-            let filename = index_serialization_path(dirpath, &index_id);
-            serialize_index(filename, hnsw.clone()).unwrap();
-            */
-        }
-        Commands::Load2 {
             key,
             domain,
             directory,
@@ -389,6 +358,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             directory,
             size,
             commit,
+            recall_proportion,
         } => {
             eprintln!("Testing recall");
             let dirpath = Path::new(&directory);
@@ -398,140 +368,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 create_index_name(&domain, &commit)
             ));
             let store = VectorStore::new(dirpath, size);
-            let hnsw: HnswIndex = deserialize_index(hnsw_index_path, Arc::new(store))
-                .unwrap()
-                .unwrap();
-            let mut rng = thread_rng();
-            let num = hnsw.vector_count();
-            let max = (0.001 * num as f32) as usize;
-            let mut seen = HashSet::new();
-            let vecs_to_find: Vec<VectorId> = (0..max)
-                .map(|_| {
-                    let vid: VectorId;
-                    loop {
-                        let v = VectorId(rng.gen_range(0..num));
-                        if seen.insert(v) {
-                            vid = v;
-                            break;
-                        }
-                    }
-                    vid
-                })
-                .collect();
-            let relevant: usize = vecs_to_find
-                .par_iter()
-                .filter(|vid| {
-                    let res = hnsw.search(AbstractVector::Stored(**vid), 3200, 2);
-                    res.iter().map(|(v, _)| v).any(|v| v == *vid)
-                })
-                .count();
-            let recall = relevant as f32 / max as f32;
+            let hnsw = HnswConfiguration::deserialize(hnsw_index_path, Arc::new(store)).unwrap();
+            let recall = hnsw.stochastic_recall(recall_proportion);
             eprintln!("Recall: {recall}");
-        }
-        Commands::Diagnostics {
-            domain,
-            directory,
-            size,
-            commit,
-            layer,
-        } => {
-            let dirpath = Path::new(&directory);
-            let hnsw_index_path = dbg!(format!(
-                "{}/{}.hnsw",
-                directory,
-                create_index_name(&domain, &commit)
-            ));
-            let store = VectorStore::new(dirpath, size);
-            let hnsw: HnswIndex = deserialize_index(hnsw_index_path, Arc::new(store))
-                .unwrap()
-                .unwrap();
-
-            let bottom_distances: Vec<NodeDistance> =
-                hnsw.node_distances_for_layer(hnsw.layer_count() - 1 - layer);
-
-            let mut bottom_distances: Vec<(NodeId, usize)> = bottom_distances
-                .into_iter()
-                .enumerate()
-                .map(|(ix, d)| (NodeId(ix), d.index_sum))
-                .collect();
-
-            bottom_distances.sort_by_key(|(_, d)| usize::MAX - d);
-
-            let unreachables: Vec<NodeId> = bottom_distances
-                .iter()
-                .take_while(|(_, d)| *d == !0)
-                .map(|(n, _)| *n)
-                .collect();
-
-            eprintln!("unreachables: {}", unreachables.len());
-
-            let mean = bottom_distances
-                .iter()
-                .skip(unreachables.len())
-                .map(|(_, d)| d)
-                .sum::<usize>() as f32
-                / (bottom_distances.len() - unreachables.len()) as f32;
-            eprintln!("mean: {mean}");
-
-            let variance = bottom_distances
-                .iter()
-                .skip(unreachables.len())
-                .map(|(_, d)| {
-                    let d = *d as f32;
-                    let diff = if d > mean { d - mean } else { mean - d };
-                    diff * diff
-                })
-                .sum::<f32>()
-                / (bottom_distances.len() - unreachables.len()) as f32;
-
-            eprintln!("variance: {variance}");
-
-            for x in bottom_distances.iter().skip(unreachables.len()).take(250) {
-                eprintln!(" {} has distance {}", x.0 .0, x.1);
-            }
-
-            let mut clusters: Vec<(NodeId, Vec<(NodeId, usize)>)> = unreachables
-                .par_iter()
-                .map(|node| {
-                    (
-                        *node,
-                        hnsw.reachables_from_node_for_layer(
-                            hnsw.layer_count() - 1 - layer,
-                            *node,
-                            &unreachables[..],
-                        ),
-                    )
-                })
-                .collect();
-
-            clusters.sort_by_key(|c| usize::MAX - c.1.len());
-
-            for x in clusters.iter().take(250) {
-                eprintln!(
-                    " from {} we reach {} previously unreachables",
-                    x.0 .0,
-                    x.1.len()
-                );
-            }
-
-            // take first from unreachables
-            // figure out its neighbors and if they are also unreachables
-            let mut cluster_queue: Vec<_> = clusters.iter().map(Some).collect();
-            cluster_queue.reverse();
-            let mut nodes_to_promote: Vec<NodeId> = Vec::new();
-            while let Some(next) = cluster_queue.pop() {
-                if let Some((nodeid, _)) = next {
-                    nodes_to_promote.push(*nodeid);
-                    for other in cluster_queue.iter_mut() {
-                        if let Some((_, other_distances)) = other {
-                            if other_distances.iter().any(|(n, _)| nodeid == n) {
-                                *other = None
-                            }
-                        }
-                    }
-                }
-            }
-            eprintln!("Nodes to promote: {nodes_to_promote:?}");
         }
         Commands::Duplicates {
             commit,
@@ -548,9 +387,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 create_index_name(&domain, &commit)
             ));
             let store = VectorStore::new(dirpath, size);
-            let hnsw: HnswIndex = deserialize_index(hnsw_index_path, Arc::new(store))
-                .unwrap()
-                .unwrap();
+            let hnsw = HnswConfiguration::deserialize(hnsw_index_path, Arc::new(store)).unwrap();
 
             let initial_search_depth = 3 * hnsw.zero_neighborhood_size();
             let elts = if let Some(take) = take {
@@ -591,12 +428,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 create_index_name(&domain, &commit)
             ));
             let store = VectorStore::new(dirpath, size);
-            let mut hnsw: HnswIndex = deserialize_index(&hnsw_index_path, Arc::new(store))
-                .unwrap()
-                .unwrap();
 
             if let Some(threshold) = improve_neighbors {
+                let mut hnsw: HnswConfiguration =
+                    HnswConfiguration::deserialize(&hnsw_index_path, Arc::new(store)).unwrap();
+
                 hnsw.improve_neighbors(threshold, proportion);
+
                 // TODO should write to staging first
                 hnsw.serialize(hnsw_index_path)?;
             } else {
@@ -618,9 +456,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 create_index_name(&domain, &commit)
             ));
             let store = VectorStore::new(dirpath, size);
-            let hnsw: HnswIndex = deserialize_index(&hnsw_index_path, Arc::new(store))
-                .unwrap()
-                .unwrap();
+            let hnsw = HnswConfiguration::deserialize(&hnsw_index_path, Arc::new(store)).unwrap();
 
             let mut sequence_path = PathBuf::from(directory);
             sequence_path.push(format!("{sequence_domain}.vecs"));
@@ -643,7 +479,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         {
                             let mut lock = output.lock();
                             serde_json::to_writer(&mut lock, &result_tuple).unwrap();
-                            write!(&mut lock, "\n").unwrap();
+                            writeln!(&mut lock).unwrap();
                         }
 
                         // do index lookup stuff
@@ -657,6 +493,146 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     }
                 }
             }
+        }
+        Commands::TestQuantization {
+            commit,
+            domain,
+            directory,
+            size,
+        } => {
+            let dirpath = Path::new(&directory);
+            let hnsw_index_path = dbg!(format!(
+                "{}/{}.hnsw",
+                directory,
+                create_index_name(&domain, &commit)
+            ));
+            let store = VectorStore::new(dirpath, size);
+            let hnsw = HnswConfiguration::deserialize(hnsw_index_path, Arc::new(store)).unwrap();
+            if let HnswConfiguration::QuantizedOpenAi(_, hnsw) = hnsw {
+                let c = hnsw.quantized_comparator();
+                let quantized_vecs = c.data.read().unwrap();
+                let mut cursor: &[Quantized32Embedding] = &quantized_vecs;
+                let quantizer = hnsw.quantizer();
+                // sample_avg = sum(errors)/|errors|
+                // sample_var = sum((error - sample_avg)^2)/|errors|
+
+                let fc = hnsw.full_comparator();
+
+                let errors = vec![0.0_f32; hnsw.vector_count()];
+
+                let mut offset = 0;
+                for chunk in fc.vector_chunks() {
+                    let len = chunk.len();
+                    let quantized_chunk = &cursor[..len];
+                    cursor = &cursor[len..];
+
+                    chunk
+                        .into_par_iter()
+                        .zip(quantized_chunk.into_par_iter())
+                        .map(|(full_vec, quantized_vec)| {
+                            let reconstructed = quantizer.reconstruct(quantized_vec);
+
+                            fc.compare_raw(&full_vec, &reconstructed)
+                        })
+                        .enumerate()
+                        .for_each(|(ix, distance)| unsafe {
+                            let ptr = errors.as_ptr().add(offset + ix) as *mut f32;
+                            *ptr = distance;
+                        });
+
+                    offset += len;
+                }
+
+                let sample_avg: f32 = errors.iter().sum::<f32>() / errors.len() as f32;
+                let sample_var = errors
+                    .iter()
+                    .map(|e| (e - sample_avg))
+                    .map(|x| x * x)
+                    .sum::<f32>()
+                    / (errors.len() - 1) as f32;
+                let sample_deviation = sample_var.sqrt();
+
+                eprintln!("sample avg: {sample_avg}\nsample var: {sample_var}\nsample deviation: {sample_deviation}");
+            } else if let HnswConfiguration::SmallQuantizedOpenAi(_, hnsw) = hnsw {
+                let c = hnsw.quantized_comparator();
+                let quantized_vecs = c.data.read().unwrap();
+                let mut cursor: &[Quantized16Embedding] = &quantized_vecs;
+                let quantizer = hnsw.quantizer();
+                // sample_avg = sum(errors)/|errors|
+                // sample_var = sum((error - sample_avg)^2)/|errors|
+
+                let fc = hnsw.full_comparator();
+
+                let errors = vec![0.0_f32; hnsw.vector_count()];
+
+                let mut offset = 0;
+                for chunk in fc.vector_chunks() {
+                    if offset == 0 {
+                        // first iteration let's print some extra things
+                        let first_vec = &chunk[0];
+                        let first_quantized_vec = &cursor[0];
+                        let first_reconstructed_vec = quantizer.reconstruct(first_quantized_vec);
+                        for (f1, f2) in first_vec.iter().zip(first_reconstructed_vec.iter()) {
+                            let distance = (f1 - f2).abs();
+                            eprintln!(" {f1} {f2} ({distance})");
+                        }
+                    }
+                    let len = chunk.len();
+                    let quantized_chunk = &cursor[..len];
+                    cursor = &cursor[len..];
+
+                    chunk
+                        .into_par_iter()
+                        .zip(quantized_chunk.into_par_iter())
+                        .map(|(full_vec, quantized_vec)| {
+                            let reconstructed = quantizer.reconstruct(quantized_vec);
+
+                            fc.compare_raw(&full_vec, &reconstructed)
+                        })
+                        .enumerate()
+                        .for_each(|(ix, distance)| unsafe {
+                            let ptr = errors.as_ptr().add(offset + ix) as *mut f32;
+                            *ptr = distance;
+                        });
+
+                    offset += len;
+                }
+
+                let sample_avg: f32 = errors.iter().sum::<f32>() / errors.len() as f32;
+                let sample_var = errors
+                    .iter()
+                    .map(|e| (e - sample_avg))
+                    .map(|x| x * x)
+                    .sum::<f32>()
+                    / errors.len() as f32;
+                let sample_deviation = sample_var.sqrt();
+
+                eprintln!("sample avg: {sample_avg}\nsample var: {sample_var}\nsample deviation: {sample_deviation}");
+            } else {
+                panic!("not a pq hnsw index");
+            }
+        }
+        Commands::SearchServer {
+            port,
+            operations_file,
+            directory,
+            commit,
+            domain,
+            size,
+            key,
+        } => {
+            let key = key_or_env(key);
+            search_server::serve(
+                port,
+                &operations_file,
+                &directory,
+                &commit,
+                &domain,
+                size,
+                &key,
+            )
+            .await
+            .unwrap()
         }
     }
 

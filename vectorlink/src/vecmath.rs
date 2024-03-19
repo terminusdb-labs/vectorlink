@@ -6,15 +6,25 @@ pub const EMBEDDING_BYTE_LENGTH: usize = EMBEDDING_LENGTH * 4;
 pub type Embedding = [f32; EMBEDDING_LENGTH];
 pub type EmbeddingBytes = [u8; EMBEDDING_BYTE_LENGTH];
 
-pub const QUANTIZED_EMBEDDING_LENGTH: usize = 48;
-pub const QUANTIZED_EMBEDDING_BYTE_LENGTH: usize = QUANTIZED_EMBEDDING_LENGTH * 2;
-pub type QuantizedEmbedding = [u16; QUANTIZED_EMBEDDING_LENGTH];
-pub type QuantizedEmbeddingBytes = [u8; QUANTIZED_EMBEDDING_BYTE_LENGTH];
+pub const QUANTIZED_32_EMBEDDING_LENGTH: usize = 48;
+pub const QUANTIZED_32_EMBEDDING_BYTE_LENGTH: usize = QUANTIZED_32_EMBEDDING_LENGTH * 2;
+pub type Quantized32Embedding = [u16; QUANTIZED_32_EMBEDDING_LENGTH];
+pub type Quantized32EmbeddingBytes = [u8; QUANTIZED_32_EMBEDDING_BYTE_LENGTH];
 
 pub const CENTROID_32_LENGTH: usize = 32;
 pub const CENTROID_32_BYTE_LENGTH: usize = CENTROID_32_LENGTH * 4;
 pub type Centroid32 = [f32; CENTROID_32_LENGTH];
-pub type CentroidBytes = [u8; CENTROID_32_BYTE_LENGTH];
+pub type Centroid32Bytes = [u8; CENTROID_32_BYTE_LENGTH];
+
+pub const QUANTIZED_16_EMBEDDING_LENGTH: usize = 96;
+pub const QUANTIZED_16_EMBEDDING_BYTE_LENGTH: usize = QUANTIZED_16_EMBEDDING_LENGTH * 2;
+pub type Quantized16Embedding = [u16; QUANTIZED_16_EMBEDDING_LENGTH];
+pub type Quantized16EmbeddingBytes = [u8; QUANTIZED_16_EMBEDDING_BYTE_LENGTH];
+
+pub const CENTROID_16_LENGTH: usize = 16;
+pub const CENTROID_16_BYTE_LENGTH: usize = CENTROID_16_LENGTH * 4;
+pub type Centroid16 = [f32; CENTROID_16_LENGTH];
+pub type Centroid16Bytes = [u8; CENTROID_16_BYTE_LENGTH];
 
 pub fn empty_embedding() -> Embedding {
     [0.0; EMBEDDING_LENGTH]
@@ -35,7 +45,7 @@ pub fn random_normalized_embedding<R: Rng>(rng: &mut R) -> Embedding {
 }
 
 #[inline]
-fn clamp_01(f: f32) -> f32 {
+pub fn clamp_01(f: f32) -> f32 {
     if f <= 0.0 {
         0.0
     } else if f >= 1.0 {
@@ -96,12 +106,78 @@ pub fn normalized_cosine_distance_32_scalar(v1: &Centroid32, v2: &Centroid32) ->
 
 pub use simd::normalized_cosine_distance_32_simd;
 
+use crate::comparator::DistanceCalculator;
+
 pub fn euclidean_distance_32(v1: &Centroid32, v2: &Centroid32) -> f32 {
-    simd::euclidean_distance_simd(v1, v2)
+    simd::euclidean_distance_32_simd(v1, v2)
+}
+
+pub fn euclidean_partial_distance_32(v1: &Centroid32, v2: &Centroid32) -> f32 {
+    simd::euclidean_partial_distance_32_simd(v1, v2)
+}
+
+pub fn euclidean_distance_16(v1: &Centroid16, v2: &Centroid16) -> f32 {
+    simd::euclidean_distance_16_simd(v1, v2)
+}
+
+pub fn euclidean_partial_distance_16(v1: &Centroid16, v2: &Centroid16) -> f32 {
+    simd::euclidean_partial_distance_16_simd(v1, v2)
+}
+
+pub fn cosine_partial_distance_32(v1: &Centroid32, v2: &Centroid32) -> f32 {
+    simd::cosine_partial_distance_32_simd(v1, v2)
+}
+
+#[derive(Default)]
+pub struct EuclideanDistance32;
+impl DistanceCalculator for EuclideanDistance32 {
+    type T = Centroid32;
+
+    fn partial_distance(&self, left: &Self::T, right: &Self::T) -> f32 {
+        euclidean_partial_distance_32(left, right)
+    }
+
+    fn finalize_partial_distance(&self, distance: f32) -> f32 {
+        distance.sqrt()
+    }
+
+    fn aggregate_partial_distances(&self, distances: &[f32]) -> f32 {
+        assert!(distances.len() == QUANTIZED_32_EMBEDDING_LENGTH);
+        let cast = unsafe { &*(distances.as_ptr() as *const [f32; QUANTIZED_32_EMBEDDING_LENGTH]) };
+        simd::sum_48(cast).sqrt()
+    }
+}
+
+#[derive(Default)]
+pub struct EuclideanDistance16;
+impl DistanceCalculator for EuclideanDistance16 {
+    type T = Centroid16;
+
+    fn partial_distance(&self, left: &Self::T, right: &Self::T) -> f32 {
+        euclidean_partial_distance_16(left, right)
+    }
+
+    fn finalize_partial_distance(&self, distance: f32) -> f32 {
+        distance.sqrt()
+    }
+
+    fn aggregate_partial_distances(&self, distances: &[f32]) -> f32 {
+        assert!(distances.len() == QUANTIZED_16_EMBEDDING_LENGTH);
+        let cast = unsafe { &*(distances.as_ptr() as *const [f32; QUANTIZED_16_EMBEDDING_LENGTH]) };
+        simd::sum_96(cast).sqrt()
+    }
 }
 
 pub fn normalize_vec(vec: &mut Embedding) {
     simd::normalize_vec_simd(vec)
+}
+
+pub fn sum_48(vec: &[f32; 48]) -> f32 {
+    simd::sum_48(vec)
+}
+
+pub fn sum_96(vec: &[f32; 96]) -> f32 {
+    simd::sum_96(vec)
 }
 
 pub mod simd {
@@ -134,7 +210,22 @@ pub mod simd {
         normalize_cosine_distance(sum.reduce_sum())
     }
 
-    pub fn euclidean_distance_simd(left: &Centroid32, right: &Centroid32) -> f32 {
+    pub fn cosine_partial_distance_32_simd(left: &Centroid32, right: &Centroid32) -> f32 {
+        let mut sum = <f32x16>::splat(0.);
+        let l = <f32x16>::from_slice(&left[0..16]);
+        let r = <f32x16>::from_slice(&right[0..16]);
+        sum += l * r;
+        let l = <f32x16>::from_slice(&left[16..32]);
+        let r = <f32x16>::from_slice(&right[16..32]);
+        sum += l * r;
+        sum.reduce_sum()
+    }
+
+    pub fn euclidean_distance_32_simd(left: &Centroid32, right: &Centroid32) -> f32 {
+        euclidean_partial_distance_32_simd(left, right).sqrt()
+    }
+
+    pub fn euclidean_partial_distance_32_simd(left: &Centroid32, right: &Centroid32) -> f32 {
         let mut sum = <f32x16>::splat(0.);
         let l = <f32x16>::from_slice(&left[0..16]);
         let r = <f32x16>::from_slice(&right[0..16]);
@@ -144,8 +235,20 @@ pub mod simd {
         let r = <f32x16>::from_slice(&right[16..32]);
         let res = (l - r);
         sum += res * res;
-        let f = sum.reduce_sum();
-        f.sqrt()
+        sum.reduce_sum()
+    }
+
+    pub fn euclidean_distance_16_simd(left: &Centroid16, right: &Centroid16) -> f32 {
+        euclidean_partial_distance_16_simd(left, right).sqrt()
+    }
+
+    pub fn euclidean_partial_distance_16_simd(left: &Centroid16, right: &Centroid16) -> f32 {
+        let mut sum = <f32x16>::splat(0.);
+        let l = <f32x16>::from_slice(&left[0..16]);
+        let r = <f32x16>::from_slice(&right[0..16]);
+        let res = (l - r);
+        sum += res * res;
+        sum.reduce_sum()
     }
 
     pub fn normalize_vec_simd(vec: &mut Embedding) {
@@ -166,6 +269,25 @@ pub mod simd {
             let array = scaled.to_array();
             subvecs.copy_from_slice(array.as_ref());
         }
+    }
+
+    pub fn sum_48(array: &[f32; 48]) -> f32 {
+        let mut sum = <f32x16>::from_slice(&array[..16]);
+        sum += <f32x16>::from_slice(&array[16..32]);
+        sum += <f32x16>::from_slice(&array[32..48]);
+
+        sum.reduce_sum()
+    }
+
+    pub fn sum_96(array: &[f32; 96]) -> f32 {
+        let mut sum = <f32x16>::from_slice(&array[..16]);
+        sum += <f32x16>::from_slice(&array[16..32]);
+        sum += <f32x16>::from_slice(&array[32..48]);
+        sum += <f32x16>::from_slice(&array[48..64]);
+        sum += <f32x16>::from_slice(&array[48..80]);
+        sum += <f32x16>::from_slice(&array[80..96]);
+
+        sum.reduce_sum()
     }
 }
 

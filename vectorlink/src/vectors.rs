@@ -24,7 +24,7 @@ use crate::comparator::Centroid32Comparator;
 use crate::store::{LoadedVectorRange, SequentialVectorLoader, VectorLoader};
 use crate::vecmath::{
     Centroid32, Embedding, EmbeddingBytes, CENTROID_32_LENGTH, EMBEDDING_BYTE_LENGTH,
-    EMBEDDING_LENGTH, QUANTIZED_EMBEDDING_LENGTH,
+    EMBEDDING_LENGTH, QUANTIZED_32_EMBEDDING_LENGTH,
 };
 use parallel_hnsw::pq::HnswQuantizer;
 

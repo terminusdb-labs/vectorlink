@@ -183,7 +183,7 @@ async fn execute_request_and_get_bytes(
     Ok((status, bytes))
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, ValueEnum, Serialize, Deserialize)]
 pub enum Model {
     Ada2,
     Small3,

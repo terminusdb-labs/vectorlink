@@ -46,16 +46,15 @@ use tokio::{io::AsyncBufReadExt, sync::RwLock};
 use tokio_stream::{wrappers::LinesStream, Stream};
 use tokio_util::io::StreamReader;
 
+use crate::configuration::OpenAIHnsw;
 use crate::indexer::create_index_name;
-use crate::indexer::deserialize_index;
 use crate::indexer::index_serialization_path;
 use crate::indexer::search;
-use crate::indexer::serialize_index;
 use crate::indexer::IndexError;
 use crate::indexer::Point;
 use crate::indexer::PointOperation;
 use crate::indexer::SearchError;
-use crate::indexer::{start_indexing_from_operations, HnswIndex, IndexIdentifier, OpenAI};
+use crate::indexer::{start_indexing_from_operations, IndexIdentifier, OpenAI};
 use crate::openai::Model;
 use crate::openai::{embeddings_for, EmbeddingError};
 use crate::vectors::VectorStore;
@@ -80,6 +79,15 @@ impl Operation {
             Operation::Changed { string, id } => Some(string),
             Operation::Deleted { id } => None,
             Operation::Error { message } => None,
+        }
+    }
+
+    pub fn id(self) -> Option<String> {
+        match self {
+            Operation::Inserted { id, .. }
+            | Operation::Changed { id, .. }
+            | Operation::Deleted { id } => Some(id),
+            Operation::Error { .. } => None,
         }
     }
 }
@@ -137,7 +145,7 @@ enum SpecParseError {
     NoCommitIdOrDomain,
 }
 
-fn query_map(uri: &Uri) -> HashMap<String, String> {
+pub(crate) fn query_map(uri: &Uri) -> HashMap<String, String> {
     uri.query()
         .map(|v| {
             url::form_urlencoded::parse(v.as_bytes())
@@ -332,7 +340,7 @@ pub struct Service {
     vector_store: Arc<VectorStore>,
     pending: Mutex<HashSet<String>>,
     tasks: RwLock<HashMap<String, TaskStatus>>,
-    indexes: RwLock<HashMap<String, Arc<HnswIndex>>>,
+    indexes: RwLock<HashMap<String, Arc<OpenAIHnsw>>>,
 }
 
 #[derive(Debug, Error)]
@@ -416,8 +424,6 @@ enum ResponseError {
     IdMissing(String),
     #[error("Embedding error: {0:?}")]
     EmbeddingError(#[from] EmbeddingError),
-    #[error("index not found")]
-    IndexNotFound,
     #[error("source commit not found")]
     SourceCommitNotFound,
     #[error("target commit already has an index")]
@@ -445,21 +451,21 @@ impl Service {
         self.tasks.write().await.insert(task_id, status);
     }
 
-    async fn get_index(&self, index_id: &str) -> Result<Arc<HnswIndex>, ResponseError> {
+    async fn get_index(&self, index_id: &str) -> Result<Arc<OpenAIHnsw>, ResponseError> {
         if let Some(hnsw) = self.indexes.read().await.get(index_id) {
             Ok(hnsw.clone())
         } else {
             let mut path = self.path.clone();
             let domain = self.vector_store.get_domain(index_id)?;
             let index_path = index_serialization_path(path, index_id);
-            match deserialize_index(index_path, self.vector_store.clone())? {
-                Some(hnsw) => Ok(hnsw.into()),
-                None => Err(ResponseError::IndexNotFound),
-            }
+            Ok(Arc::new(OpenAIHnsw::deserialize(
+                index_path,
+                self.vector_store.clone(),
+            )?))
         }
     }
 
-    async fn set_index(&self, index_id: String, hnsw: Arc<HnswIndex>) {
+    async fn set_index(&self, index_id: String, hnsw: Arc<OpenAIHnsw>) {
         self.indexes.write().await.insert(index_id, hnsw);
     }
 
@@ -521,14 +527,16 @@ impl Service {
     async fn load_hnsw_for_indexing(
         &self,
         idxid: IndexIdentifier,
-    ) -> Result<Arc<HnswIndex>, ResponseError> {
+    ) -> Result<Arc<OpenAIHnsw>, ResponseError> {
         if let Some(previous_id) = idxid.previous {
             //let commit = idxid.commit;
             let domain = idxid.domain;
             let previous_id = create_index_name(&domain, &previous_id);
             self.get_index(&previous_id).await
         } else {
-            Err(ResponseError::IndexNotFound)
+            Err(ResponseError::SerializationError(
+                SerializationError::IndexNotFound,
+            ))
         }
     }
 
@@ -542,7 +550,7 @@ impl Service {
         model: Model,
         index_id: &str,
         content_endpoint: String,
-    ) -> Result<(String, Arc<HnswIndex>), ResponseError> {
+    ) -> Result<(String, Arc<OpenAIHnsw>), ResponseError> {
         let internal_task_id = task_id;
         let opstream = get_operations_from_content_endpoint(
             content_endpoint.to_string(),
@@ -658,7 +666,7 @@ impl Service {
         std::mem::drop(indexes);
         tokio::task::block_in_place(move || {
             let file_name = index_serialization_path(&self.path, &target_name);
-            serialize_index(file_name, &index).unwrap();
+            index.serialize(file_name).unwrap();
         });
         Ok(())
     }

@@ -20,12 +20,13 @@ use urlencoding::encode;
 
 use crate::{
     comparator::{
-        Centroid32Comparator, DiskOpenAIComparator, OpenAIComparator, QuantizedComparator,
+        Centroid16Comparator, DiskOpenAIComparator, OpenAIComparator, Quantized16Comparator,
     },
+    configuration::HnswConfiguration,
     indexer::{create_index_name, index_serialization_path},
     openai::{embeddings_for, EmbeddingError, Model},
     server::Operation,
-    vecmath::Embedding,
+    vecmath::{Embedding, CENTROID_16_LENGTH, EMBEDDING_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH},
     vectors::VectorStore,
 };
 
@@ -190,6 +191,7 @@ pub async fn index_using_operations_and_vectors<
     size: usize,
     id_offset: u64,
     quantize_hnsw: bool,
+    model: Model,
 ) -> Result<(), IndexingError> {
     // Start at last hnsw offset
     let mut progress_file_path: PathBuf = staging_path.as_ref().into();
@@ -218,6 +220,7 @@ pub async fn index_using_operations_and_vectors<
     let mut op_file = File::open(&op_file_path).await?;
     let mut op_stream = get_operations_from_file(&mut op_file).await?;
     let mut i: usize = 0;
+
     let index_file_name = "index";
     //    let temp_file = index_serialization_path(&staging_path, temp_file_name);
     let staging_file = index_serialization_path(&staging_path, index_file_name);
@@ -254,21 +257,24 @@ pub async fn index_using_operations_and_vectors<
         .collect();
 
     eprintln!("ready to generate hnsw");
-    if quantize_hnsw {
+    let hnsw = if quantize_hnsw {
         let number_of_vectors = NUMBER_OF_CENTROIDS / 10;
-        let cc = Centroid32Comparator::default();
-        let qc = QuantizedComparator {
-            cc: cc.clone(),
-            data: Default::default(),
-        };
         let c = DiskOpenAIComparator::new(domain_obj);
-        let hnsw = QuantizedHnsw::new(number_of_vectors, cc, qc, c);
-        hnsw.serialize(&staging_file)?;
+        let hnsw: QuantizedHnsw<
+            EMBEDDING_LENGTH,
+            CENTROID_16_LENGTH,
+            QUANTIZED_16_EMBEDDING_LENGTH,
+            Centroid16Comparator,
+            Quantized16Comparator,
+            DiskOpenAIComparator,
+        > = QuantizedHnsw::new(number_of_vectors, c);
+        HnswConfiguration::SmallQuantizedOpenAi(model, hnsw)
     } else {
         let hnsw = Hnsw::generate(comparator, vecs, 24, 48, 12);
-        eprintln!("done generating hnsw");
-        hnsw.serialize(&staging_file)?;
-    }
+        HnswConfiguration::UnquantizedOpenAi(model, hnsw)
+    };
+    eprintln!("done generating hnsw");
+    hnsw.serialize(&staging_file)?;
     eprintln!("done serializing hnsw");
     eprintln!("renaming {staging_file:?} to {final_file:?}");
     tokio::fs::rename(&staging_file, &final_file).await?;
@@ -322,7 +328,7 @@ pub async fn index_from_operations_file<P: AsRef<Path>>(
         id_offset = extend_vector_store(domain, &vectorlink_path, vector_path, size).await? as u64;
         extended_file.write_u64(id_offset).await?;
     } else {
-        eprintln!("Already concantenated");
+        eprintln!("Already concatenated");
         id_offset = extended_file.read_u64().await?;
     }
 
@@ -336,6 +342,7 @@ pub async fn index_from_operations_file<P: AsRef<Path>>(
             size,
             id_offset,
             quantize_hnsw,
+            model,
         )
         .await?;
     } else {
