@@ -52,8 +52,11 @@ impl Comparator for OpenAIComparator {
 impl Serializable for OpenAIComparator {
     type Params = Arc<VectorStore>;
     fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
-        let mut comparator_file: std::fs::File =
-            OpenOptions::new().write(true).create(true).open(path)?;
+        let mut comparator_file: std::fs::File = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(path)?;
         eprintln!("opened comparator serialize file");
         let domain = self.domain.name();
         // How do we get this value?
