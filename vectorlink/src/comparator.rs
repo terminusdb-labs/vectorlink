@@ -96,8 +96,10 @@ impl pq::VectorSelector for DiskOpenAIComparator {
             set.insert(candidate);
         }
 
+        let vector_file = self.domain.file();
+
         set.into_iter()
-            .map(|index| self.domain.vec(index).unwrap())
+            .map(|index| vector_file.vec(index).unwrap())
             .collect()
     }
 
@@ -532,32 +534,6 @@ impl pq::VectorStore for Quantized16Comparator {
         self.data = Arc::new(data);
 
         vectors
-    }
-}
-
-pub struct ChunkedVecIterator<T, I: Iterator<Item = T>> {
-    iter: I,
-    _x: PhantomData<T>,
-}
-
-impl<T, I: Iterator<Item = T>> Iterator for ChunkedVecIterator<T, I> {
-    type Item = Vec<T>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let mut chunk = Vec::with_capacity(1_000_000);
-
-        for item in self.iter.by_ref() {
-            chunk.push(item);
-            if chunk.len() == 16_384 {
-                break;
-            }
-        }
-
-        if chunk.is_empty() {
-            None
-        } else {
-            Some(chunk)
-        }
     }
 }
 

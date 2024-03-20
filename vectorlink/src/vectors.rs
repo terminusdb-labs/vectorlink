@@ -54,7 +54,7 @@ impl Domain {
         })
     }
 
-    fn file<'a>(&'a self) -> impl Deref<Target = VectorFile<Embedding>> + 'a {
+    pub fn file<'a>(&'a self) -> impl Deref<Target = VectorFile<Embedding>> + 'a {
         self.file.read().unwrap()
     }
 

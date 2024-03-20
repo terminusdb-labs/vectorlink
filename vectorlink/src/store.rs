@@ -1,8 +1,8 @@
 use std::{
     fs::{File, OpenOptions},
-    io::{self, Read, Seek, SeekFrom, Write},
+    io::{self, Read},
     marker::PhantomData,
-    ops::{Deref, Index, Range},
+    ops::{Index, Range},
     os::{
         fd::AsRawFd,
         unix::fs::{FileExt, MetadataExt, OpenOptionsExt},
@@ -195,38 +195,6 @@ impl<T> Iterator for SequentialVectorLoader<T> {
     }
 }
 
-pub fn append_vector_range<W: Write + Seek, T: Copy>(mut w: W, vectors: &[T]) -> io::Result<()> {
-    let vector_bytes = unsafe {
-        std::slice::from_raw_parts(
-            vectors.as_ptr() as *const u8,
-            vectors.len() * std::mem::size_of::<T>(),
-        )
-    };
-
-    w.seek(SeekFrom::End(0))?;
-    w.write_all(vector_bytes)?;
-    w.flush()?;
-
-    Ok(())
-}
-
-pub fn append_vectors<W: Write + Seek, T: Copy, DT: Deref<Target = T>, I: Iterator<Item = DT>>(
-    mut w: W,
-    vectors: I,
-) -> io::Result<()> {
-    w.seek(SeekFrom::End(0))?;
-    for vec in vectors {
-        let vector_bytes = unsafe {
-            std::slice::from_raw_parts(&*vec as *const T as *const u8, std::mem::size_of::<T>())
-        };
-
-        w.write_all(vector_bytes)?;
-    }
-    w.flush()?;
-
-    Ok(())
-}
-
 pub struct VectorFile<T> {
     path: PathBuf,
     file: File,
@@ -244,6 +212,7 @@ impl<T: Copy> VectorFile<T> {
         }
     }
 
+    #[allow(unused)]
     pub fn create_new<P: AsRef<Path>>(path: P, os_cached: bool) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         let mut options = OpenOptions::new();
