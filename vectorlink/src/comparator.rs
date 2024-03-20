@@ -8,15 +8,12 @@ use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
-use std::ops::Deref;
-use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
-use std::sync::{RwLock, RwLockReadGuard};
 use std::{path::Path, sync::Arc};
 
 use parallel_hnsw::{pq, Comparator, Serializable, SerializationError, VectorId};
 
-use crate::store::LoadedVectorRange;
+use crate::store::{LoadedVectorRange, VectorFile};
 use crate::vecmath::{
     self, EuclideanDistance16, EuclideanDistance32, Quantized16Embedding, Quantized32Embedding,
     CENTROID_16_LENGTH, CENTROID_32_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH,
@@ -223,7 +220,7 @@ impl MemoizedPartialDistances {
 
 pub struct ArrayCentroidComparator<const N: usize, C> {
     distances: Arc<MemoizedPartialDistances>,
-    centroids: Arc<Vec<[f32; N]>>,
+    centroids: Arc<LoadedVectorRange<[f32; N]>>,
     calculator: PhantomData<C>,
 }
 
@@ -245,9 +242,10 @@ impl<const SIZE: usize, C: DistanceCalculator<T = [f32; SIZE]> + Default>
     CentroidComparatorConstructor for ArrayCentroidComparator<SIZE, C>
 {
     fn new(centroids: Vec<Self::T>) -> Self {
+        let len = centroids.len();
         Self {
             distances: Arc::new(MemoizedPartialDistances::new(C::default(), &centroids)),
-            centroids: Arc::new(centroids),
+            centroids: Arc::new(LoadedVectorRange::new(centroids, 0..len)),
             calculator: PhantomData,
         }
     }
@@ -282,15 +280,9 @@ impl<const N: usize, C: DistanceCalculator<T = [f32; N]> + Default> Serializable
     type Params = ();
 
     fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
-        let centroids = &self.centroids;
-        let len = self.centroids.len();
-        let buf: &[u8] = unsafe {
-            std::slice::from_raw_parts(
-                centroids.as_ptr() as *const u8,
-                len * std::mem::size_of::<[f32; N]>(),
-            )
-        };
-        std::fs::write(path, buf)?;
+        let mut vector_file: VectorFile<[f32; N]> = VectorFile::create(path, true)?;
+        vector_file.append_vector_range(self.centroids.vecs())?;
+
         Ok(())
     }
 
@@ -298,18 +290,15 @@ impl<const N: usize, C: DistanceCalculator<T = [f32; N]> + Default> Serializable
         path: P,
         _params: Self::Params,
     ) -> Result<Self, SerializationError> {
-        let size = std::fs::metadata(&path)?.size() as usize;
-        let centroid_byte_len = std::mem::size_of::<[f32; N]>();
-        assert_eq!(0, size % centroid_byte_len);
-        let number_of_centroids = size / centroid_byte_len;
-        let mut vec = vec![[0.0; N]; number_of_centroids];
-        let mut file = std::fs::File::open(&path)?;
-        let buf = unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr() as *mut u8, size) };
-        file.read_exact(buf)?;
+        let vector_file: VectorFile<[f32; N]> = VectorFile::open(path, true)?;
+        let centroids = Arc::new(vector_file.all_vectors()?);
 
         Ok(Self {
-            distances: Arc::new(MemoizedPartialDistances::new(C::default(), &vec)),
-            centroids: Arc::new(vec),
+            distances: Arc::new(MemoizedPartialDistances::new(
+                C::default(),
+                centroids.vecs(),
+            )),
+            centroids,
             calculator: PhantomData,
         })
     }
@@ -318,7 +307,7 @@ impl<const N: usize, C: DistanceCalculator<T = [f32; N]> + Default> Serializable
 #[derive(Clone)]
 pub struct Quantized32Comparator {
     pub cc: Centroid32Comparator,
-    pub data: Arc<RwLock<Vec<Quantized32Embedding>>>,
+    pub data: Arc<LoadedVectorRange<Quantized32Embedding>>,
 }
 
 impl QuantizedComparatorConstructor for Quantized32Comparator {
@@ -335,7 +324,7 @@ impl QuantizedComparatorConstructor for Quantized32Comparator {
 #[derive(Clone)]
 pub struct Quantized16Comparator {
     pub cc: Centroid16Comparator,
-    pub data: Arc<RwLock<Vec<Quantized16Embedding>>>,
+    pub data: Arc<LoadedVectorRange<Quantized16Embedding>>,
 }
 
 impl QuantizedComparatorConstructor for Quantized16Comparator {
@@ -346,19 +335,6 @@ impl QuantizedComparatorConstructor for Quantized16Comparator {
             cc: cc.clone(),
             data: Default::default(),
         }
-    }
-}
-
-pub struct ReadLockedVec<'a, T> {
-    lock: RwLockReadGuard<'a, Vec<T>>,
-    id: VectorId,
-}
-
-impl<'a, T> Deref for ReadLockedVec<'a, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.lock[self.id.0]
     }
 }
 
@@ -380,13 +356,10 @@ where
 {
     type T = Quantized32Embedding;
 
-    type Borrowable<'a> = ReadLockedVec<'a, Self::T>;
+    type Borrowable<'a> = &'a Quantized32Embedding;
 
     fn lookup(&self, v: VectorId) -> Self::Borrowable<'_> {
-        ReadLockedVec {
-            lock: self.data.read().unwrap(),
-            id: v,
-        }
+        &self.data[v.0]
     }
 
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
@@ -413,11 +386,8 @@ impl Serializable for Quantized32Comparator {
         self.cc.serialize(index_path)?;
 
         let vector_path = path_buf.join("vectors");
-        let vec_lock = self.data.read().unwrap();
-        let size = vec_lock.len() * std::mem::size_of::<Quantized32Embedding>();
-        let buf: &[u8] =
-            unsafe { std::slice::from_raw_parts(vec_lock.as_ptr() as *const u8, size) };
-        std::fs::write(vector_path, buf)?;
+        let mut vector_file = VectorFile::open(vector_path, true)?;
+        vector_file.append_vector_range(self.data.vecs())?;
         Ok(())
     }
 
@@ -430,15 +400,10 @@ impl Serializable for Quantized32Comparator {
         let cc = Centroid32Comparator::deserialize(index_path, ())?;
 
         let vector_path = path_buf.join("vectors");
+        let vector_file = VectorFile::open(vector_path, true)?;
+        let range = vector_file.all_vectors()?;
 
-        let size = std::fs::metadata(&vector_path)?.size() as usize;
-        assert_eq!(0, size % std::mem::size_of::<Quantized32Embedding>());
-        let number_of_quantized = size / std::mem::size_of::<Quantized32Embedding>();
-        let mut vec = vec![[0_u16; QUANTIZED_32_EMBEDDING_LENGTH]; number_of_quantized];
-        let mut file = std::fs::File::open(&vector_path)?;
-        let buf = unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr() as *mut u8, size) };
-        file.read_exact(buf)?;
-        let data = Arc::new(RwLock::new(vec));
+        let data = Arc::new(range);
         Ok(Self { cc, data })
     }
 }
@@ -447,13 +412,20 @@ impl pq::VectorStore for Quantized32Comparator {
     type T = <Quantized32Comparator as Comparator>::T;
 
     fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
-        let mut data = self.data.write().unwrap();
-        let vid = data.len();
+        // this is p retty stupid, but then, these comparators should not be storing in the first place
+        let mut new_contents: Vec<Self::T> = Vec::with_capacity(self.data.len() + i.size_hint().0);
+        new_contents.extend(self.data.vecs().iter());
+        let vid = self.data.len();
         let mut vectors: Vec<VectorId> = Vec::new();
-        data.extend(i.enumerate().map(|(i, v)| {
+        new_contents.extend(i.enumerate().map(|(i, v)| {
             vectors.push(VectorId(vid + i));
             v
         }));
+        let end = new_contents.len();
+
+        let data = LoadedVectorRange::new(new_contents, 0..end);
+        self.data = Arc::new(data);
+
         vectors
     }
 }
@@ -488,13 +460,10 @@ where
 {
     type T = Quantized16Embedding;
 
-    type Borrowable<'a> = ReadLockedVec<'a, Self::T>;
+    type Borrowable<'a> = &'a Self::T;
 
     fn lookup(&self, v: VectorId) -> Self::Borrowable<'_> {
-        ReadLockedVec {
-            lock: self.data.read().unwrap(),
-            id: v,
-        }
+        self.data.vec(v.0)
     }
 
     fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
@@ -521,11 +490,8 @@ impl Serializable for Quantized16Comparator {
         self.cc.serialize(index_path)?;
 
         let vector_path = path_buf.join("vectors");
-        let vec_lock = self.data.read().unwrap();
-        let size = vec_lock.len() * std::mem::size_of::<Quantized16Embedding>();
-        let buf: &[u8] =
-            unsafe { std::slice::from_raw_parts(vec_lock.as_ptr() as *const u8, size) };
-        std::fs::write(vector_path, buf)?;
+        let mut vector_file = VectorFile::open(vector_path, true)?;
+        vector_file.append_vector_range(self.data.vecs())?;
         Ok(())
     }
 
@@ -538,15 +504,10 @@ impl Serializable for Quantized16Comparator {
         let cc = Centroid16Comparator::deserialize(index_path, ())?;
 
         let vector_path = path_buf.join("vectors");
+        let vector_file = VectorFile::open(vector_path, true)?;
+        let range = vector_file.all_vectors()?;
 
-        let size = std::fs::metadata(&vector_path)?.size() as usize;
-        assert_eq!(0, size % std::mem::size_of::<Quantized16Embedding>());
-        let number_of_quantized = size / std::mem::size_of::<Quantized16Embedding>();
-        let mut vec = vec![[0_u16; QUANTIZED_16_EMBEDDING_LENGTH]; number_of_quantized];
-        let mut file = std::fs::File::open(&vector_path)?;
-        let buf = unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr() as *mut u8, size) };
-        file.read_exact(buf)?;
-        let data = Arc::new(RwLock::new(vec));
+        let data = Arc::new(range);
         Ok(Self { cc, data })
     }
 }
@@ -555,13 +516,21 @@ impl pq::VectorStore for Quantized16Comparator {
     type T = <Quantized16Comparator as Comparator>::T;
 
     fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
-        let mut data = self.data.write().unwrap();
-        let vid = data.len();
+        // this is p retty stupid, but then, these comparators should not be storing in the first place
+        let mut new_contents: Vec<Self::T> = Vec::with_capacity(self.data.len() + i.size_hint().0);
+        new_contents.extend(self.data.vecs().iter());
+        let vid = self.data.len();
         let mut vectors: Vec<VectorId> = Vec::new();
-        data.extend(i.enumerate().map(|(i, v)| {
+        new_contents.extend(i.enumerate().map(|(i, v)| {
             vectors.push(VectorId(vid + i));
             v
         }));
+
+        let end = new_contents.len();
+
+        let data = LoadedVectorRange::new(new_contents, 0..end);
+        self.data = Arc::new(data);
+
         vectors
     }
 }

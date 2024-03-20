@@ -510,7 +510,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let hnsw = HnswConfiguration::deserialize(hnsw_index_path, Arc::new(store)).unwrap();
             if let HnswConfiguration::QuantizedOpenAi(_, hnsw) = hnsw {
                 let c = hnsw.quantized_comparator();
-                let quantized_vecs = c.data.read().unwrap();
+                let quantized_vecs = c.data.vecs();
                 let mut cursor: &[Quantized32Embedding] = &quantized_vecs;
                 let quantizer = hnsw.quantizer();
                 // sample_avg = sum(errors)/|errors|
@@ -555,7 +555,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 eprintln!("sample avg: {sample_avg}\nsample var: {sample_var}\nsample deviation: {sample_deviation}");
             } else if let HnswConfiguration::SmallQuantizedOpenAi(_, hnsw) = hnsw {
                 let c = hnsw.quantized_comparator();
-                let quantized_vecs = c.data.read().unwrap();
+                let quantized_vecs = c.data.vecs();
                 let mut cursor: &[Quantized16Embedding] = &quantized_vecs;
                 let quantizer = hnsw.quantizer();
                 // sample_avg = sum(errors)/|errors|

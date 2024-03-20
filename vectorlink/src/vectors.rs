@@ -6,7 +6,7 @@ use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Seek, SeekFrom, Write};
 use std::mem::MaybeUninit;
-use std::ops::{Deref, Range};
+use std::ops::{Deref, DerefMut, Range};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::prelude::FileExt;
 use std::path::{Path, PathBuf};
@@ -21,7 +21,7 @@ use serde::Serialize;
 use urlencoding::encode;
 
 use crate::comparator::Centroid32Comparator;
-use crate::store::{LoadedVectorRange, SequentialVectorLoader, VectorLoader};
+use crate::store::{LoadedVectorRange, SequentialVectorLoader, VectorFile, VectorLoader};
 use crate::vecmath::{
     Centroid32, Embedding, EmbeddingBytes, CENTROID_32_LENGTH, EMBEDDING_BYTE_LENGTH,
     EMBEDDING_LENGTH, QUANTIZED_32_EMBEDDING_LENGTH,
@@ -32,9 +32,7 @@ pub struct Domain {
     name: Arc<String>,
     index: usize,
     path: PathBuf,
-    file: File,
-    num_vecs: AtomicUsize,
-    write_lock: Mutex<()>,
+    file: Arc<RwLock<VectorFile<Embedding>>>,
 }
 
 impl Domain {
@@ -42,91 +40,65 @@ impl Domain {
         &self.name
     }
 
-    fn open(dir: &Path, name: &str, index: usize) -> io::Result<Self> {
-        let mut path = dir.to_path_buf();
+    fn open<P: AsRef<Path>>(dir: P, name: &str, index: usize) -> io::Result<Self> {
+        let mut path = dir.as_ref().to_path_buf();
         let encoded_name = encode(name);
         path.push(format!("{encoded_name}.vecs"));
-        let end = std::fs::metadata(&path)?.size();
-        let num_vecs = AtomicUsize::new(end as usize / EMBEDDING_BYTE_LENGTH);
-        // todo: shouldn't we be creating this file if it is not there?
-        let file = OpenOptions::new()
-            .custom_flags(libc::O_DIRECT)
-            .read(true)
-            .open(&path)?;
+        let file = Arc::new(RwLock::new(VectorFile::open_create(&path, true)?));
 
         Ok(Domain {
             name: Arc::new(name.to_string()),
             file,
             index,
             path,
-            num_vecs,
-            write_lock: Mutex::new(()),
         })
+    }
+
+    fn file<'a>(&'a self) -> impl Deref<Target = VectorFile<Embedding>> + 'a {
+        self.file.read().unwrap()
+    }
+
+    fn file_mut<'a>(&'a self) -> impl DerefMut<Target = VectorFile<Embedding>> + 'a {
+        self.file.write().unwrap()
     }
 
     fn add_vecs<'a, I: Iterator<Item = &'a Embedding>>(
         &self,
         vecs: I,
     ) -> io::Result<(usize, usize)> {
-        let lock = self.write_lock.lock().unwrap();
-        let mut write_file = OpenOptions::new()
-            .create(false)
-            .write(true)
-            .open(&self.path)?;
-        write_file.seek(SeekFrom::End(0))?;
-        let mut count = 0;
-        for embedding in vecs {
-            let bytes: &EmbeddingBytes = unsafe { std::mem::transmute(embedding) };
-            write_file.write_all(bytes)?;
-            count += 1;
-        }
-        write_file.flush()?;
-        write_file.sync_data()?;
-        let num_vecs = self.num_vecs.load(atomic::Ordering::Relaxed);
-        let new_num_vecs = num_vecs + count;
-        self.num_vecs.store(new_num_vecs, atomic::Ordering::Relaxed);
+        let mut vector_file = self.file_mut();
+        let old_len = vector_file.num_vecs();
+        let count = vector_file.append_vectors(vecs)?;
 
-        Ok((num_vecs, count))
+        Ok((old_len, count))
     }
 
     pub fn concatenate_file<P: AsRef<Path>>(&self, path: P) -> io::Result<usize> {
-        let lock = self.write_lock.lock().unwrap();
-        let size = self.num_vecs();
-        let mut write_file = OpenOptions::new()
-            .create(false)
-            .write(true)
-            .open(&self.path)?;
-        write_file.seek(SeekFrom::End(0))?;
-        let mut read_file = File::options().read(true).open(&path)?;
-        io::copy(&mut read_file, &mut write_file)?;
-        Ok(size)
+        let read_vector_file = VectorFile::open(path, true)?;
+        self.file_mut().append_vector_file(&read_vector_file)
     }
 
     pub fn num_vecs(&self) -> usize {
-        self.num_vecs.load(atomic::Ordering::Relaxed)
-    }
-
-    pub fn loader<'a>(&'a self) -> VectorLoader<'a, Embedding> {
-        VectorLoader::new(&self.file)
+        self.file().num_vecs()
     }
 
     pub fn vec(&self, id: usize) -> io::Result<Embedding> {
-        self.loader().vec(id)
+        Ok(self.file().vec(id)?)
     }
 
     pub fn vec_range(&self, range: Range<usize>) -> io::Result<LoadedVectorRange<Embedding>> {
-        self.loader().load_range(range)
+        self.file().vector_range(range)
     }
 
     pub fn all_vecs(&self) -> io::Result<LoadedVectorRange<Embedding>> {
-        self.loader().load_range(0..self.num_vecs())
+        self.file().all_vectors()
     }
 
     pub fn vector_chunks(
         &self,
         chunk_size: usize,
     ) -> io::Result<SequentialVectorLoader<Embedding>> {
-        SequentialVectorLoader::open(&self.path, chunk_size)
+        self.file().vector_chunks(chunk_size)
     }
 }
 
