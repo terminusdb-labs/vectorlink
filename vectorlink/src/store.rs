@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[derive(Clone)]
 pub struct LoadedVectorRange<T> {
     range: Range<usize>,
     vecs: Vec<T>,
@@ -70,6 +71,10 @@ impl<T: Copy> LoadedVectorRange<T> {
     }
     pub fn len(&self) -> usize {
         self.vecs.len()
+    }
+
+    pub fn into_vec(self) -> Vec<T> {
+        self.vecs
     }
 }
 
@@ -156,7 +161,7 @@ impl<T> SequentialVectorLoader<T> {
             let bytes_buf = unsafe {
                 std::slice::from_raw_parts_mut(
                     buf.as_ptr() as *mut u8,
-                    bytes_read * std::mem::size_of::<T>(),
+                    buf.len() * std::mem::size_of::<T>(),
                 )
             };
             loop {

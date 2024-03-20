@@ -88,6 +88,9 @@ impl pq::VectorSelector for DiskOpenAIComparator {
 
     fn selection(&self, size: usize) -> Vec<Self::T> {
         // TODO do something else for sizes close to number of vecs
+        if size >= self.domain.num_vecs() {
+            return self.domain.all_vecs().unwrap().clone().into_vec();
+        }
         let mut rng = thread_rng();
         let mut set = HashSet::new();
         let range = Uniform::from(0_usize..self.domain.num_vecs());
