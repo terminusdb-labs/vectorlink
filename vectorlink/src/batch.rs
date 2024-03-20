@@ -259,7 +259,10 @@ pub async fn index_using_operations_and_vectors<
     eprintln!("ready to generate hnsw");
     let hnsw = if quantize_hnsw {
         let number_of_vectors = NUMBER_OF_CENTROIDS / 10;
-        let c = DiskOpenAIComparator::new(domain_obj);
+        let c = DiskOpenAIComparator::new(
+            domain_obj.name().to_owned(),
+            Arc::new(domain_obj.immutable_file()),
+        );
         let hnsw: QuantizedHnsw<
             EMBEDDING_LENGTH,
             CENTROID_16_LENGTH,
