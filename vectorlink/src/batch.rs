@@ -174,7 +174,7 @@ pub async fn extend_vector_store<P0: AsRef<Path>, P1: AsRef<Path>>(
     let vs_path: PathBuf = vectorlink_path.as_ref().into();
     let vs: VectorStore = VectorStore::new(vs_path, size);
     let domain = vs.get_domain(domain)?;
-    domain.concatenate_file(&vec_path)
+    Ok(domain.concatenate_file(&vec_path)?.0)
 }
 
 const NUMBER_OF_CENTROIDS: usize = 10_000;

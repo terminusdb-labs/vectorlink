@@ -73,9 +73,13 @@ impl Domain {
         Ok((old_len, count))
     }
 
-    pub fn concatenate_file<P: AsRef<Path>>(&self, path: P) -> io::Result<usize> {
+    pub fn concatenate_file<P: AsRef<Path>>(&self, path: P) -> io::Result<(usize, usize)> {
         let read_vector_file = VectorFile::open(path, true)?;
-        self.file_mut().append_vector_file(&read_vector_file)
+        let old_size = self.num_vecs();
+        Ok((
+            old_size,
+            self.file_mut().append_vector_file(&read_vector_file)?,
+        ))
     }
 
     pub fn num_vecs(&self) -> usize {
