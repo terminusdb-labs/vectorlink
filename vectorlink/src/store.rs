@@ -337,6 +337,10 @@ impl<T: Copy> VectorFile<T> {
             _x: PhantomData,
         })
     }
+
+    pub fn path(&self) -> &PathBuf {
+        &self.path
+    }
 }
 
 pub struct ImmutableVectorFile<T>(VectorFile<T>);
