@@ -5,7 +5,7 @@ use crate::{
     openai::{embeddings_for, EmbeddingError, Model},
     server::Operation,
     vecmath::{self, Embedding},
-    vectors::{Domain, LoadedVec, VectorStore},
+    vectors::{LoadedVec, VectorStore},
 };
 use parallel_hnsw::{AbstractVector, Hnsw, SerializationError, VectorId};
 use rand_pcg::Lcg128Xsl64;

@@ -15,6 +15,7 @@ mod server;
 mod store;
 mod vecmath;
 mod vectors;
+mod domain;
 
 mod search_server;
 

@@ -11,3 +11,4 @@ pub mod vecmath;
 pub mod vectors;
 
 pub mod store;
+pub mod domain;
