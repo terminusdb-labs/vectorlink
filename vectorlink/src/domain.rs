@@ -1,5 +1,5 @@
 use std::{
-    any::Any,
+    any::{Any, TypeId},
     collections::{HashMap, HashSet},
     error::Error,
     io,
@@ -17,9 +17,17 @@ use parallel_hnsw::{
     Comparator, Hnsw, Serializable, VectorId,
 };
 use rand::{distributions::Uniform, rngs::StdRng, thread_rng, Rng, SeedableRng};
+use serde::{Deserialize, Serialize};
 use urlencoding::encode;
 
-use crate::store::{ImmutableVectorFile, LoadedVectorRange, SequentialVectorLoader, VectorFile};
+use crate::{
+    comparator::{Centroid16Comparator, Centroid32Comparator, HnswQuantizer16, HnswQuantizer32},
+    store::{ImmutableVectorFile, LoadedVectorRange, SequentialVectorLoader, VectorFile},
+    vecmath::{
+        Embedding, CENTROID_16_LENGTH, CENTROID_32_LENGTH, EMBEDDING_LENGTH,
+        QUANTIZED_16_EMBEDDING_LENGTH, QUANTIZED_32_EMBEDDING_LENGTH,
+    },
+};
 
 pub trait GenericDomain: 'static + Any + Send + Sync {
     fn name(&self) -> &str;
@@ -37,9 +45,12 @@ pub trait Deriver: Any {
     type From: Copy;
 
     fn concatenate_derived(&self, loader: SequentialVectorLoader<Self::From>) -> io::Result<()>;
+    fn configuration(&self) -> DerivedDomainConfiguration;
     fn chunk_size(&self) -> usize {
         1_000
     }
+
+    //fn try_cast<T>(&self) -> Option<Deriver<From=T>>
 }
 
 pub trait NewDeriver {
@@ -68,6 +79,31 @@ impl<
         const CENTROID_SIZE: usize,
         const QUANTIZED_SIZE: usize,
         C: 'static + Comparator<T = [f32; CENTROID_SIZE]>,
+    > PqDerivedDomain<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+{
+    fn as_arc<T: Copy + 'static>(
+        self,
+    ) -> Option<Arc<dyn Deriver<From = T> + Send + Sync + 'static>> {
+        let expected_type_id = TypeId::of::<[f32; SIZE]>();
+        let actual_type_id = TypeId::of::<T>();
+        if expected_type_id == actual_type_id {
+            let result = Arc::new(self) as Arc<dyn Deriver<From = [f32; SIZE]>>;
+            // this should be safe as we asserted at runtime that these types are the same
+            let transmuted: Arc<dyn Deriver<From = T> + Send + Sync + 'static> =
+                unsafe { std::mem::transmute(result) };
+
+            Some(transmuted)
+        } else {
+            None
+        }
+    }
+}
+
+impl<
+        const SIZE: usize,
+        const CENTROID_SIZE: usize,
+        const QUANTIZED_SIZE: usize,
+        C: 'static + Comparator<T = [f32; CENTROID_SIZE]>,
     > Deriver for PqDerivedDomain<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
 {
     type From = [f32; SIZE];
@@ -85,6 +121,73 @@ impl<
         }
 
         Ok(())
+    }
+
+    fn configuration(&self) -> DerivedDomainConfiguration {
+        match (SIZE, CENTROID_SIZE, QUANTIZED_SIZE) {
+            (EMBEDDING_LENGTH, CENTROID_16_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH) => {
+                DerivedDomainConfiguration::SmallPq
+            }
+            (EMBEDDING_LENGTH, CENTROID_32_LENGTH, QUANTIZED_32_EMBEDDING_LENGTH) => {
+                DerivedDomainConfiguration::LargePq
+            }
+            _ => panic!("unserializable pq derived domain"),
+        }
+    }
+}
+
+pub type PqDerivedDomain16 = PqDerivedDomain<
+    EMBEDDING_LENGTH,
+    CENTROID_16_LENGTH,
+    QUANTIZED_16_EMBEDDING_LENGTH,
+    Centroid16Comparator,
+>;
+pub type PqDerivedDomain32 = PqDerivedDomain<
+    EMBEDDING_LENGTH,
+    CENTROID_32_LENGTH,
+    QUANTIZED_32_EMBEDDING_LENGTH,
+    Centroid32Comparator,
+>;
+
+#[derive(Serialize, Deserialize)]
+pub enum DerivedDomainConfiguration {
+    SmallPq,
+    LargePq,
+}
+
+impl DerivedDomainConfiguration {
+    pub fn new<T: Copy + 'static, P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> Result<Arc<dyn Deriver<From = T> + Send + Sync + 'static>, io::Error> {
+        match self {
+            Self::SmallPq => {
+                let file = RwLock::new(VectorFile::open(
+                    path.as_ref().join("quantized.vecs"),
+                    true,
+                )?);
+                // panic here if T is not what we expect
+                let quantizer: HnswQuantizer16 =
+                    HnswQuantizer::deserialize(path, ()).expect("TODO");
+
+                let domain: PqDerivedDomain16 = PqDerivedDomain { file, quantizer };
+
+                Ok(domain.as_arc::<T>().unwrap())
+            }
+            Self::LargePq => {
+                let file = RwLock::new(VectorFile::open(
+                    path.as_ref().join("quantized.vecs"),
+                    true,
+                )?);
+                // panic here if T is not what we expect
+                let quantizer: HnswQuantizer32 =
+                    HnswQuantizer::deserialize(path, ()).expect("TODO");
+
+                let domain: PqDerivedDomain32 = PqDerivedDomain { file, quantizer };
+
+                Ok(domain.as_arc::<T>().unwrap())
+            }
+        }
     }
 }
 
@@ -224,15 +327,36 @@ impl<T: Copy + 'static> Domain<T> {
         self.file().num_vecs()
     }
 
-    pub fn open<P: AsRef<Path>>(dir: P, name: &str) -> io::Result<Self> {
+    pub fn open<P: AsRef<Path>>(dir: P, name: &str) -> Result<Self, io::Error> {
         let mut path = dir.as_ref().to_path_buf();
         let encoded_name = encode(name);
         path.push(format!("{encoded_name}.vecs"));
         let file = RwLock::new(VectorFile::open_create(&path, true)?);
 
+        // load derived domains
+        let mut derived_path = path.clone();
+        derived_path.set_extension("derived");
+        let mut derived_domains = HashMap::new();
+        if derived_path.exists() {
+            for file in std::fs::read_dir(derived_path)? {
+                let derived = file?;
+                // now we have to discover what kind of derived domain this is
+                // the options are hardcoded.
+                let name = derived.file_name().into_string().unwrap();
+                let config_file = derived.path().join("config.json");
+                if config_file.exists() {
+                    let mut file = std::fs::File::open(config_file)?;
+                    let config: DerivedDomainConfiguration = serde_json::from_reader(file)?;
+                    let derived_domain = config.new::<T, _>(derived.path()).expect("TODO");
+
+                    derived_domains.insert(name, derived_domain);
+                }
+            }
+        }
+
         Ok(Domain {
             name: name.to_string(),
-            derived_domains: RwLock::new(HashMap::new()),
+            derived_domains: RwLock::new(derived_domains),
             file,
         })
     }
@@ -299,7 +423,11 @@ impl<T: Copy + 'static> Domain<T> {
         path.push(&name);
         std::fs::create_dir_all(&path)?;
 
+        let config_path = path.join("config.json");
         let deriver = deriver.new(path, &*file)?;
+        let config = deriver.configuration();
+        let config_string = serde_json::to_string(&config).unwrap();
+        std::fs::write(config_path, config_string)?;
         derived_domains.insert(name, Arc::new(deriver));
 
         Ok(())

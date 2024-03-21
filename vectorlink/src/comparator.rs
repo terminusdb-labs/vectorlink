@@ -1,5 +1,5 @@
 use parallel_hnsw::pq::{
-    CentroidComparatorConstructor, PartialDistance, QuantizedComparatorConstructor,
+    CentroidComparatorConstructor, HnswQuantizer, PartialDistance, QuantizedComparatorConstructor,
 };
 use rand::distributions::Uniform;
 use rand::{thread_rng, Rng};
@@ -16,7 +16,7 @@ use parallel_hnsw::{pq, Comparator, Serializable, SerializationError, VectorId};
 use crate::store::{ImmutableVectorFile, LoadedVectorRange, VectorFile};
 use crate::vecmath::{
     self, EuclideanDistance16, EuclideanDistance32, Quantized16Embedding, Quantized32Embedding,
-    CENTROID_16_LENGTH, CENTROID_32_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH,
+    CENTROID_16_LENGTH, CENTROID_32_LENGTH, EMBEDDING_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH,
     QUANTIZED_32_EMBEDDING_LENGTH,
 };
 use crate::{
@@ -540,6 +540,19 @@ impl pq::VectorStore for Quantized16Comparator {
         vectors
     }
 }
+
+pub type HnswQuantizer16 = HnswQuantizer<
+    EMBEDDING_LENGTH,
+    CENTROID_16_LENGTH,
+    QUANTIZED_16_EMBEDDING_LENGTH,
+    Centroid16Comparator,
+>;
+pub type HnswQuantizer32 = HnswQuantizer<
+    EMBEDDING_LENGTH,
+    CENTROID_32_LENGTH,
+    QUANTIZED_32_EMBEDDING_LENGTH,
+    Centroid32Comparator,
+>;
 
 #[cfg(test)]
 mod tests {

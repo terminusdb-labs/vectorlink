@@ -3,6 +3,7 @@
 use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::error::Error;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Seek, SeekFrom, Write};
@@ -45,7 +46,8 @@ impl VectorStore {
         }
     }
 
-    pub fn get_domain(&self, name: &str) -> io::Result<Arc<Domain<Embedding>>> {
+    // TODO better error
+    pub fn get_domain(&self, name: &str) -> Result<Arc<Domain<Embedding>>, io::Error> {
         let domains = self.domains.read().unwrap();
         if let Some(domain) = domains.get(name) {
             Ok(downcast_generic_domain(domain.clone()))
@@ -55,7 +57,10 @@ impl VectorStore {
             if let Some(domain) = domains.get(name) {
                 Ok(downcast_generic_domain(domain.clone()))
             } else {
-                let domain = Arc::new(Domain::open(&self.dir, name)?);
+                let domain = Arc::new(
+                    Domain::open(&self.dir, name)
+                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?,
+                );
                 domains.insert(name.to_string(), domain.clone());
 
                 Ok(domain)
