@@ -1,11 +1,13 @@
 use std::{
     any::Any,
+    collections::HashMap,
     io,
     ops::{Deref, DerefMut, Range},
     path::Path,
     sync::{Arc, RwLock},
 };
 
+use parallel_hnsw::pq::HnswQuantizer;
 use urlencoding::encode;
 
 use crate::store::{ImmutableVectorFile, LoadedVectorRange, SequentialVectorLoader, VectorFile};
@@ -22,9 +24,27 @@ pub fn downcast_generic_domain<T: 'static + Send + Sync>(
         .expect("Could not downcast domain to expected embedding size")
 }
 
+pub struct PqDerivedDomain<
+    const SIZE: usize,
+    const CENTROID_SIZE: usize,
+    const QUANTIZED_SIZE: usize,
+    C,
+> {
+    name: String,
+    file: RwLock<VectorFile<[u16; QUANTIZED_SIZE]>>,
+    quantizer: HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>,
+}
+
+pub trait Deriver {
+    type From: Copy;
+
+    fn append_derived(&self, vecs: &[Self::From]) -> io::Result<()>;
+}
+
 pub struct Domain<T> {
     name: String,
     file: RwLock<VectorFile<T>>,
+    derived_domains: Vec<Box<dyn Deriver<From = T> + Send + Sync>>,
 }
 
 impl<T: 'static + Copy + Send + Sync> GenericDomain for Domain<T> {
@@ -55,6 +75,7 @@ impl<T: Copy> Domain<T> {
 
         Ok(Domain {
             name: name.to_string(),
+            derived_domains: Vec::new(),
             file,
         })
     }
@@ -69,17 +90,6 @@ impl<T: Copy> Domain<T> {
 
     pub fn immutable_file(&self) -> ImmutableVectorFile<T> {
         self.file().as_immutable()
-    }
-
-    fn add_vecs<'a, I: Iterator<Item = &'a T>>(&self, vecs: I) -> io::Result<(usize, usize)>
-    where
-        T: 'a,
-    {
-        let mut vector_file = self.file_mut();
-        let old_len = vector_file.num_vecs();
-        let count = vector_file.append_vectors(vecs)?;
-
-        Ok((old_len, count))
     }
 
     pub fn concatenate_file<P: AsRef<Path>>(&self, path: P) -> io::Result<(usize, usize)> {
