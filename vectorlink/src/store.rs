@@ -28,11 +28,11 @@ impl<T> Index<usize> for LoadedVectorRange<T> {
     type Output = T;
 
     fn index(&self, index: usize) -> &Self::Output {
-        &self.vecs[index - self.range.start]
+        self.vec(index)
     }
 }
 
-impl<T: Copy> LoadedVectorRange<T> {
+impl<T> LoadedVectorRange<T> {
     pub fn new(vecs: Vec<T>, range: Range<usize>) -> Self {
         assert!(range.len() == vecs.len());
 
@@ -348,6 +348,61 @@ impl<T: Copy> VectorFile<T> {
 
     pub fn vector_chunks(&self, chunk_size: usize) -> io::Result<SequentialVectorLoader<T>> {
         SequentialVectorLoader::open(&self.path, chunk_size)
+    }
+
+    pub fn as_immutable(&self) -> ImmutableVectorFile<T> {
+        ImmutableVectorFile(Self {
+            path: self.path.clone(),
+            file: self
+                .file
+                .try_clone()
+                .expect("could not clone file handle while creating immutable vector filehandle"),
+            num_vecs: self.num_vecs,
+            _x: PhantomData,
+        })
+    }
+}
+
+pub struct ImmutableVectorFile<T>(VectorFile<T>);
+impl<T> Clone for ImmutableVectorFile<T> {
+    fn clone(&self) -> Self {
+        Self(VectorFile {
+            path: self.0.path.clone(),
+            file: self
+                .0
+                .file
+                .try_clone()
+                .expect("could not clone file handle while creating immutable vector filehandle"),
+            num_vecs: self.0.num_vecs,
+            _x: PhantomData,
+        })
+    }
+}
+
+#[allow(unused)]
+impl<T: Copy> ImmutableVectorFile<T> {
+    pub fn vector_loader(&self) -> VectorLoader<T> {
+        self.0.vector_loader()
+    }
+
+    pub fn vector_range(&self, range: Range<usize>) -> io::Result<LoadedVectorRange<T>> {
+        self.0.vector_range(range)
+    }
+
+    pub fn vec(&self, index: usize) -> io::Result<T> {
+        self.0.vec(index)
+    }
+
+    pub fn all_vectors(&self) -> io::Result<LoadedVectorRange<T>> {
+        self.0.all_vectors()
+    }
+
+    pub fn num_vecs(&self) -> usize {
+        self.0.num_vecs()
+    }
+
+    pub fn vector_chunks(&self, chunk_size: usize) -> io::Result<SequentialVectorLoader<T>> {
+        self.0.vector_chunks(chunk_size)
     }
 }
 

@@ -21,21 +21,23 @@ use serde::Serialize;
 use urlencoding::encode;
 
 use crate::comparator::Centroid32Comparator;
-use crate::store::{LoadedVectorRange, SequentialVectorLoader, VectorFile, VectorLoader};
+use crate::store::{
+    ImmutableVectorFile, LoadedVectorRange, SequentialVectorLoader, VectorFile, VectorLoader,
+};
 use crate::vecmath::{
     Centroid32, Embedding, EmbeddingBytes, CENTROID_32_LENGTH, EMBEDDING_BYTE_LENGTH,
     EMBEDDING_LENGTH, QUANTIZED_32_EMBEDDING_LENGTH,
 };
 use parallel_hnsw::pq::HnswQuantizer;
 
-pub struct Domain {
+pub struct Domain<T> {
     name: Arc<String>,
     index: usize,
     path: PathBuf,
-    file: Arc<RwLock<VectorFile<Embedding>>>,
+    file: Arc<RwLock<VectorFile<T>>>,
 }
 
-impl Domain {
+impl<T: Copy> Domain<T> {
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -54,18 +56,22 @@ impl Domain {
         })
     }
 
-    pub fn file<'a>(&'a self) -> impl Deref<Target = VectorFile<Embedding>> + 'a {
+    pub fn file<'a>(&'a self) -> impl Deref<Target = VectorFile<T>> + 'a {
         self.file.read().unwrap()
     }
 
-    fn file_mut<'a>(&'a self) -> impl DerefMut<Target = VectorFile<Embedding>> + 'a {
+    fn file_mut<'a>(&'a self) -> impl DerefMut<Target = VectorFile<T>> + 'a {
         self.file.write().unwrap()
     }
 
-    fn add_vecs<'a, I: Iterator<Item = &'a Embedding>>(
-        &self,
-        vecs: I,
-    ) -> io::Result<(usize, usize)> {
+    pub fn immutable_file(&self) -> ImmutableVectorFile<T> {
+        self.file().as_immutable()
+    }
+
+    fn add_vecs<'a, I: Iterator<Item = &'a T>>(&self, vecs: I) -> io::Result<(usize, usize)>
+    where
+        T: 'a,
+    {
         let mut vector_file = self.file_mut();
         let old_len = vector_file.num_vecs();
         let count = vector_file.append_vectors(vecs)?;
@@ -86,22 +92,19 @@ impl Domain {
         self.file().num_vecs()
     }
 
-    pub fn vec(&self, id: usize) -> io::Result<Embedding> {
+    pub fn vec(&self, id: usize) -> io::Result<T> {
         Ok(self.file().vec(id)?)
     }
 
-    pub fn vec_range(&self, range: Range<usize>) -> io::Result<LoadedVectorRange<Embedding>> {
+    pub fn vec_range(&self, range: Range<usize>) -> io::Result<LoadedVectorRange<T>> {
         self.file().vector_range(range)
     }
 
-    pub fn all_vecs(&self) -> io::Result<LoadedVectorRange<Embedding>> {
+    pub fn all_vecs(&self) -> io::Result<LoadedVectorRange<T>> {
         self.file().all_vectors()
     }
 
-    pub fn vector_chunks(
-        &self,
-        chunk_size: usize,
-    ) -> io::Result<SequentialVectorLoader<Embedding>> {
+    pub fn vector_chunks(&self, chunk_size: usize) -> io::Result<SequentialVectorLoader<T>> {
         self.file().vector_chunks(chunk_size)
     }
 }
@@ -146,7 +149,7 @@ impl PartialEq for LoadedVec {
 
 pub struct VectorStore {
     dir: PathBuf,
-    domains: RwLock<HashMap<String, Arc<Domain>>>,
+    domains: RwLock<HashMap<String, Arc<Domain<Embedding>>>>,
 }
 
 impl VectorStore {
@@ -157,7 +160,7 @@ impl VectorStore {
         }
     }
 
-    pub fn get_domain(&self, name: &str) -> io::Result<Arc<Domain>> {
+    pub fn get_domain(&self, name: &str) -> io::Result<Arc<Domain<Embedding>>> {
         let domains = self.domains.read().unwrap();
         if let Some(domain) = domains.get(name) {
             Ok(domain.clone())
