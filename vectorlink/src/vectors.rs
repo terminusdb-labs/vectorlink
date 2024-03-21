@@ -32,44 +32,6 @@ use crate::vecmath::{
 };
 use parallel_hnsw::pq::HnswQuantizer;
 
-#[derive(Clone)]
-pub struct LoadedVec {
-    range: Arc<LoadedVectorRange<Embedding>>,
-    vec: usize,
-}
-
-impl LoadedVec {
-    pub fn id(&self) -> usize {
-        self.vec
-    }
-}
-
-impl fmt::Debug for LoadedVec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "LoadedVec({:?})", self.vec)
-    }
-}
-
-impl Deref for LoadedVec {
-    type Target = Embedding;
-
-    fn deref(&self) -> &Self::Target {
-        // This pointer should be valid, because the only way for the
-        // underlying page to move out of the load map is if the
-        // pagehandle arc has no more strong references. Since we
-        // ourselves hold one such reference, this won't happen for
-        // the lifetime of LoadedVecl.
-
-        unsafe { self.range.vec(self.vec) }
-    }
-}
-
-impl PartialEq for LoadedVec {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::as_ptr(&self.range) == Arc::as_ptr(&other.range) && self.vec == other.vec
-    }
-}
-
 pub struct VectorStore {
     dir: PathBuf,
     domains: RwLock<HashMap<String, Arc<dyn GenericDomain>>>,

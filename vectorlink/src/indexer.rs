@@ -4,14 +4,15 @@ use crate::{
     configuration::OpenAIHnsw,
     openai::{embeddings_for, EmbeddingError, Model},
     server::Operation,
+    store::LoadedVectorRange,
     vecmath::{self, Embedding},
-    vectors::{LoadedVec, VectorStore},
+    vectors::VectorStore,
 };
 use parallel_hnsw::{AbstractVector, Hnsw, SerializationError, VectorId};
 use rand_pcg::Lcg128Xsl64;
 use rayon::prelude::*;
 use space::{Metric, Neighbor};
-use std::{fs::File, path::Path, sync::Arc};
+use std::{fmt, fs::File, ops::Deref, path::Path, sync::Arc};
 use std::{
     io,
     iter::{self, zip},
@@ -22,6 +23,44 @@ use tokio::task::JoinError;
 use urlencoding::{decode, encode};
 
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone)]
+pub struct LoadedVec {
+    range: Arc<LoadedVectorRange<Embedding>>,
+    vec: usize,
+}
+
+impl LoadedVec {
+    pub fn id(&self) -> usize {
+        self.vec
+    }
+}
+
+impl fmt::Debug for LoadedVec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "LoadedVec({:?})", self.vec)
+    }
+}
+
+impl Deref for LoadedVec {
+    type Target = Embedding;
+
+    fn deref(&self) -> &Self::Target {
+        // This pointer should be valid, because the only way for the
+        // underlying page to move out of the load map is if the
+        // pagehandle arc has no more strong references. Since we
+        // ourselves hold one such reference, this won't happen for
+        // the lifetime of LoadedVecl.
+
+        unsafe { self.range.vec(self.vec) }
+    }
+}
+
+impl PartialEq for LoadedVec {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::as_ptr(&self.range) == Arc::as_ptr(&other.range) && self.vec == other.vec
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Point {
