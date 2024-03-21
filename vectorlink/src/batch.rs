@@ -26,6 +26,7 @@ use crate::{
     indexer::{create_index_name, index_serialization_path},
     openai::{embeddings_for, EmbeddingError, Model},
     server::Operation,
+    store::VectorFile,
     vecmath::{Embedding, CENTROID_16_LENGTH, EMBEDDING_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH},
     vectors::VectorStore,
 };
@@ -56,36 +57,13 @@ pub enum VectorizationError {
     Io(#[from] io::Error),
 }
 
-async fn save_embeddings(
-    vec_file: &mut File,
-    offset: usize,
-    embeddings: &[Embedding],
-) -> Result<(), VectorizationError> {
-    let transmuted = unsafe {
-        std::slice::from_raw_parts(
-            embeddings.as_ptr() as *const u8,
-            std::mem::size_of_val(embeddings),
-        )
-    };
-    vec_file
-        .seek(SeekFrom::Start(
-            (offset * std::mem::size_of::<Embedding>()) as u64,
-        ))
-        .await?;
-    vec_file.write_all(transmuted).await?;
-    vec_file.flush().await?;
-    vec_file.sync_data().await?;
-
-    Ok(())
-}
-
 pub async fn vectorize_from_operations<
     S: Stream<Item = io::Result<Operation>>,
     P: AsRef<Path> + Unpin,
 >(
     api_key: &str,
     model: Model,
-    vec_file: &mut File,
+    vec_file: &mut VectorFile<Embedding>,
     op_stream: S,
     progress_file_path: P,
 ) -> Result<usize, VectorizationError> {
@@ -122,7 +100,7 @@ pub async fn vectorize_from_operations<
         let (embeddings, chunk_failures) = embeds.unwrap()?;
         eprintln!("retrieved embeddings");
 
-        save_embeddings(vec_file, offset as usize, &embeddings).await?;
+        vec_file.append_vector_range(&embeddings)?;
         eprintln!("saved embeddings");
         failures += chunk_failures;
         offset += embeddings.len() as u64;
@@ -303,11 +281,7 @@ pub async fn index_from_operations_file<P: AsRef<Path>>(
 
     let mut vector_path = staging_path.clone();
     vector_path.push("vectors");
-    let mut vec_file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .open(&vector_path)
-        .await?;
+    let mut vec_file = VectorFile::open_create(&vector_path, true)?;
     let mut progress_file_path = staging_path.clone();
     progress_file_path.push("progress");
 

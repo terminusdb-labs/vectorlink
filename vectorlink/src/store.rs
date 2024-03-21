@@ -277,33 +277,9 @@ impl<T: Copy> VectorFile<T> {
             (self.num_vecs * std::mem::size_of::<T>()) as u64,
         )?;
         self.num_vecs = self.num_vecs + vectors.len();
-        self.file.sync_data()?;
+        self.file.sync_data()?; // TODO probably don't do it here cause we might want to append multiple ranges
 
         Ok(vectors.len())
-    }
-    pub fn append_vectors<'a, I: Iterator<Item = &'a T>>(&mut self, vectors: I) -> io::Result<usize>
-    where
-        T: 'a,
-    {
-        // wouldn't it be more straightforward to just use the file as a cursor?
-        let mut offset = (self.num_vecs * std::mem::size_of::<T>()) as u64;
-        let mut count = 0;
-        for vector in vectors {
-            let bytes = unsafe {
-                std::slice::from_raw_parts(
-                    vector as *const T as *const u8,
-                    std::mem::size_of::<T>(),
-                )
-            };
-            self.file.write_all_at(bytes, offset)?;
-            self.num_vecs += 1;
-            offset += std::mem::size_of::<T>() as u64;
-            count += 1;
-        }
-
-        self.file.sync_data()?;
-
-        Ok(count)
     }
 
     pub fn append_vector_file(&mut self, file: &VectorFile<T>) -> io::Result<usize> {

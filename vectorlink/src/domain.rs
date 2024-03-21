@@ -7,10 +7,16 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use parallel_hnsw::pq::HnswQuantizer;
+use parallel_hnsw::{
+    pq::{HnswQuantizer, Quantizer},
+    Comparator,
+};
 use urlencoding::encode;
 
-use crate::store::{ImmutableVectorFile, LoadedVectorRange, SequentialVectorLoader, VectorFile};
+use crate::{
+    store::{ImmutableVectorFile, LoadedVectorRange, SequentialVectorLoader, VectorFile},
+    vecmath::Embedding,
+};
 
 pub trait GenericDomain: 'static + Any + Send + Sync {
     fn name(&self) -> &str;
@@ -24,6 +30,15 @@ pub fn downcast_generic_domain<T: 'static + Send + Sync>(
         .expect("Could not downcast domain to expected embedding size")
 }
 
+pub trait Deriver: Any {
+    type From: Copy;
+
+    fn concatenate_derived(&self, loader: SequentialVectorLoader<Self::From>) -> io::Result<()>;
+    fn chunk_size(&self) -> usize {
+        1_000
+    }
+}
+
 pub struct PqDerivedDomain<
     const SIZE: usize,
     const CENTROID_SIZE: usize,
@@ -35,16 +50,35 @@ pub struct PqDerivedDomain<
     quantizer: HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>,
 }
 
-pub trait Deriver {
-    type From: Copy;
+impl<
+        const SIZE: usize,
+        const CENTROID_SIZE: usize,
+        const QUANTIZED_SIZE: usize,
+        C: 'static + Comparator<T = [f32; CENTROID_SIZE]>,
+    > Deriver for PqDerivedDomain<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+{
+    type From = [f32; SIZE];
 
-    fn append_derived(&self, vecs: &[Self::From]) -> io::Result<()>;
+    fn concatenate_derived(&self, loader: SequentialVectorLoader<Self::From>) -> io::Result<()> {
+        for chunk in loader {
+            let chunk = chunk?;
+            let mut result = Vec::with_capacity(chunk.len());
+            for vec in chunk.iter() {
+                let quantized = self.quantizer.quantize(vec);
+                result.push(quantized);
+            }
+            let mut file = self.file.write().unwrap();
+            file.append_vector_range(&result)?;
+        }
+
+        Ok(())
+    }
 }
 
 pub struct Domain<T> {
     name: String,
     file: RwLock<VectorFile<T>>,
-    derived_domains: Vec<Box<dyn Deriver<From = T> + Send + Sync>>,
+    derived_domains: RwLock<HashMap<String, Arc<dyn Deriver<From = T> + Send + Sync>>>,
 }
 
 impl<T: 'static + Copy + Send + Sync> GenericDomain for Domain<T> {
@@ -58,7 +92,7 @@ impl<T: 'static + Copy + Send + Sync> GenericDomain for Domain<T> {
 }
 
 #[allow(unused)]
-impl<T: Copy> Domain<T> {
+impl<T: Copy + 'static> Domain<T> {
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -75,7 +109,7 @@ impl<T: Copy> Domain<T> {
 
         Ok(Domain {
             name: name.to_string(),
-            derived_domains: Vec::new(),
+            derived_domains: RwLock::new(HashMap::new()),
             file,
         })
     }
@@ -95,6 +129,11 @@ impl<T: Copy> Domain<T> {
     pub fn concatenate_file<P: AsRef<Path>>(&self, path: P) -> io::Result<(usize, usize)> {
         let read_vector_file = VectorFile::open(path, true)?;
         let old_size = self.num_vecs();
+        let derived_domains = self.derived_domains.read().unwrap();
+        for derived in derived_domains.values() {
+            let chunk_size = derived.chunk_size();
+            derived.concatenate_derived(read_vector_file.vector_chunks(chunk_size)?)?;
+        }
         Ok((
             old_size,
             self.file_mut().append_vector_file(&read_vector_file)?,
@@ -115,5 +154,29 @@ impl<T: Copy> Domain<T> {
 
     pub fn vector_chunks(&self, chunk_size: usize) -> io::Result<SequentialVectorLoader<T>> {
         self.file().vector_chunks(chunk_size)
+    }
+
+    pub fn create_derived<D: Deriver<From = T> + 'static + Send + Sync>(
+        &self,
+        name: String,
+        deriver: D,
+    ) {
+        let mut derived_domains = self.derived_domains.write().unwrap();
+        assert!(
+            !derived_domains.contains_key(&name),
+            "tried to create derived domain that already exists"
+        );
+
+        derived_domains.insert(name, Arc::new(deriver));
+    }
+
+    pub fn derived_domain<'a, T2: Deriver + Send + Sync>(
+        &'a self,
+        name: &str,
+    ) -> Option<impl Deref<Target = T2> + 'a> {
+        let derived_domains = self.derived_domains.read().unwrap();
+        let derived = derived_domains.get(name)?;
+
+        Some(Arc::downcast::<T2>(derived.clone()).expect("derived domain was not of expected type"))
     }
 }
