@@ -31,10 +31,8 @@ use crate::vecmath::{
 use parallel_hnsw::pq::HnswQuantizer;
 
 pub struct Domain<T> {
-    name: Arc<String>,
-    index: usize,
-    path: PathBuf,
-    file: Arc<RwLock<VectorFile<T>>>,
+    name: String,
+    file: RwLock<VectorFile<T>>,
 }
 
 impl<T: Copy> Domain<T> {
@@ -42,17 +40,15 @@ impl<T: Copy> Domain<T> {
         &self.name
     }
 
-    fn open<P: AsRef<Path>>(dir: P, name: &str, index: usize) -> io::Result<Self> {
+    fn open<P: AsRef<Path>>(dir: P, name: &str) -> io::Result<Self> {
         let mut path = dir.as_ref().to_path_buf();
         let encoded_name = encode(name);
         path.push(format!("{encoded_name}.vecs"));
-        let file = Arc::new(RwLock::new(VectorFile::open_create(&path, true)?));
+        let file = RwLock::new(VectorFile::open_create(&path, true)?);
 
         Ok(Domain {
-            name: Arc::new(name.to_string()),
+            name: name.to_string(),
             file,
-            index,
-            path,
         })
     }
 
@@ -170,7 +166,7 @@ impl VectorStore {
             if let Some(domain) = domains.get(name) {
                 Ok(domain.clone())
             } else {
-                let domain = Arc::new(Domain::open(&self.dir, name, domains.len())?);
+                let domain = Arc::new(Domain::open(&self.dir, name)?);
                 domains.insert(name.to_string(), domain.clone());
 
                 Ok(domain)
