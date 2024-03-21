@@ -1,4 +1,5 @@
 #![feature(portable_simd)]
+#![feature(trait_upcasting)]
 
 use std::io::Read;
 use std::io::Write;

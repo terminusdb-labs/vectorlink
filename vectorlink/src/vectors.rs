@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -30,9 +31,31 @@ use crate::vecmath::{
 };
 use parallel_hnsw::pq::HnswQuantizer;
 
+pub trait GenericDomain: 'static + Any + Send + Sync {
+    fn name(&self) -> &str;
+    fn num_vecs(&self) -> usize;
+}
+
+fn downcast_generic_domain<T: 'static + Send + Sync>(
+    domain: Arc<dyn GenericDomain>,
+) -> Arc<Domain<T>> {
+    Arc::downcast::<Domain<T>>(domain)
+        .expect("Could not downcast domain to expected embedding size")
+}
+
 pub struct Domain<T> {
     name: String,
     file: RwLock<VectorFile<T>>,
+}
+
+impl<T: 'static + Copy + Send + Sync> GenericDomain for Domain<T> {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn num_vecs(&self) -> usize {
+        self.file().num_vecs()
+    }
 }
 
 impl<T: Copy> Domain<T> {
@@ -145,7 +168,7 @@ impl PartialEq for LoadedVec {
 
 pub struct VectorStore {
     dir: PathBuf,
-    domains: RwLock<HashMap<String, Arc<Domain<Embedding>>>>,
+    domains: RwLock<HashMap<String, Arc<dyn GenericDomain>>>,
 }
 
 impl VectorStore {
@@ -159,12 +182,12 @@ impl VectorStore {
     pub fn get_domain(&self, name: &str) -> io::Result<Arc<Domain<Embedding>>> {
         let domains = self.domains.read().unwrap();
         if let Some(domain) = domains.get(name) {
-            Ok(domain.clone())
+            Ok(downcast_generic_domain(domain.clone()))
         } else {
             std::mem::drop(domains);
             let mut domains = self.domains.write().unwrap();
             if let Some(domain) = domains.get(name) {
-                Ok(domain.clone())
+                Ok(downcast_generic_domain(domain.clone()))
             } else {
                 let domain = Arc::new(Domain::open(&self.dir, name)?);
                 domains.insert(name.to_string(), domain.clone());

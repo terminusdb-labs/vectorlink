@@ -1,4 +1,5 @@
 #![feature(portable_simd)]
+#![feature(trait_upcasting)]
 
 pub mod comparator;
 pub mod configuration;
