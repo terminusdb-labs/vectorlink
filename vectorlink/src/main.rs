@@ -9,13 +9,13 @@ use std::sync::Arc;
 mod batch;
 mod comparator;
 mod configuration;
+mod domain;
 mod indexer;
 mod openai;
 mod server;
 mod store;
 mod vecmath;
 mod vectors;
-mod domain;
 
 mod search_server;
 
@@ -23,6 +23,7 @@ use batch::index_from_operations_file;
 use clap::CommandFactory;
 use clap::{Parser, Subcommand, ValueEnum};
 use configuration::HnswConfiguration;
+use domain::DerivedDomainConfiguration;
 //use hnsw::Hnsw;
 use openai::Model;
 use parallel_hnsw::pq::Quantizer;
@@ -32,6 +33,7 @@ use parallel_hnsw::Comparator;
 use parallel_hnsw::Serializable;
 use std::fs::File;
 use std::io;
+use vecmath::Embedding;
 use vecmath::Quantized32Embedding;
 use vecmath::EMBEDDING_BYTE_LENGTH;
 use vecmath::EMBEDDING_LENGTH;
@@ -211,6 +213,16 @@ enum Commands {
         size: usize,
         #[arg(short, long)]
         key: Option<String>,
+    },
+    Quantize {
+        #[arg(short, long)]
+        directory: String,
+        #[arg(short, long)]
+        domain: String,
+        #[arg(short, long)]
+        derived: String,
+        #[arg(short, long, value_enum, default_value_t = DerivedDomainConfiguration::SmallPq)]
+        method: DerivedDomainConfiguration,
     },
 }
 
@@ -635,6 +647,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             )
             .await
             .unwrap()
+        }
+        Commands::Quantize {
+            directory,
+            domain,
+            derived,
+            method,
+        } => {
+            let store = VectorStore::new(directory, 10_000); // num bufs is actually obsolete now.
+            let domain = store.get_domain(&domain).unwrap();
+            let initializer = method.initializer::<Embedding>();
+            domain.create_derived(derived.clone(), initializer).unwrap();
         }
     }
 

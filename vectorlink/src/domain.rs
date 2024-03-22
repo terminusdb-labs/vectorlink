@@ -9,6 +9,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use clap::ValueEnum;
 use linfa::{traits::Fit, DatasetBase};
 use linfa_clustering::KMeans;
 use ndarray::{Array, Array2};
@@ -46,7 +47,7 @@ pub trait Deriver: Any {
 
     fn concatenate_derived(&self, loader: SequentialVectorLoader<Self::From>) -> io::Result<()>;
     fn concatenate_file(&self, file: &VectorFile<Self::From>) -> io::Result<()> {
-        self.concatenate_derived(file.vector_chunks(self.chunk_size())?);
+        self.concatenate_derived(file.vector_chunks(self.chunk_size())?)?;
 
         Ok(())
     }
@@ -54,19 +55,27 @@ pub trait Deriver: Any {
     fn chunk_size(&self) -> usize {
         1_000
     }
-
-    //fn try_cast<T>(&self) -> Option<Deriver<From=T>>
 }
 
-pub trait NewDeriver {
-    type T: Copy;
-    type Deriver: Deriver<From = Self::T>;
-
-    fn new(
+pub trait DerivedDomainInitializer<From> {
+    fn initialize(
         &self,
         path: PathBuf,
-        vectors: &VectorFile<Self::T>,
-    ) -> Result<Self::Deriver, Box<dyn Error>>;
+        vectors: &VectorFile<From>,
+    ) -> Result<Arc<dyn Deriver<From = From> + Send + Sync>, Box<dyn Error>>;
+}
+
+// interestingly, we're required to provide our own trait object implementation. Rust is not able to derive it for us.
+impl<From> DerivedDomainInitializer<From>
+    for Box<dyn DerivedDomainInitializer<From> + Send + Sync>
+{
+    fn initialize(
+        &self,
+        path: PathBuf,
+        vectors: &VectorFile<From>,
+    ) -> Result<Arc<dyn Deriver<From = From> + Send + Sync>, Box<dyn Error>> {
+        (**self).initialize(path, vectors)
+    }
 }
 
 pub struct PqDerivedDomain<
@@ -154,7 +163,7 @@ pub type PqDerivedDomain32 = PqDerivedDomain<
     Centroid32Comparator,
 >;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ValueEnum, Debug, Clone, Copy)]
 pub enum DerivedDomainConfiguration {
     SmallPq,
     LargePq,
@@ -194,16 +203,69 @@ impl DerivedDomainConfiguration {
             }
         }
     }
+
+    pub fn initializer<T: Copy + 'static>(
+        &self,
+    ) -> Box<dyn DerivedDomainInitializer<T> + 'static + Send + Sync> {
+        assert_eq!(TypeId::of::<T>(), TypeId::of::<Embedding>());
+        match self {
+            DerivedDomainConfiguration::SmallPq => {
+                let initializer = PqDerivedDomainInitializer::<
+                    EMBEDDING_LENGTH,
+                    CENTROID_16_LENGTH,
+                    QUANTIZED_16_EMBEDDING_LENGTH,
+                    Centroid16Comparator,
+                >::default();
+
+                let boxed: Box<dyn DerivedDomainInitializer<Embedding> + 'static + Send + Sync> =
+                    Box::new(initializer);
+
+                unsafe { std::mem::transmute(boxed) }
+            }
+            DerivedDomainConfiguration::LargePq => {
+                let initializer = PqDerivedDomainInitializer::<
+                    EMBEDDING_LENGTH,
+                    CENTROID_32_LENGTH,
+                    QUANTIZED_32_EMBEDDING_LENGTH,
+                    Centroid32Comparator,
+                >::default();
+
+                let boxed: Box<dyn DerivedDomainInitializer<Embedding> + 'static + Send + Sync> =
+                    Box::new(initializer);
+
+                unsafe { std::mem::transmute(boxed) }
+            }
+        }
+    }
 }
 
-#[derive(Default)]
-struct PqDerivedDomainInitializer<
+pub struct PqDerivedDomainInitializer<
     const SIZE: usize,
     const CENTROID_SIZE: usize,
     const QUANTIZED_SIZE: usize,
     C,
 > {
     _x: PhantomData<C>,
+}
+impl<
+        const SIZE: usize,
+        const CENTROID_SIZE: usize,
+        const QUANTIZED_SIZE: usize,
+        C: 'static
+            + Comparator<T = [f32; CENTROID_SIZE]>
+            + CentroidComparatorConstructor
+            + Serializable<Params = ()>
+            + Send,
+    > PqDerivedDomainInitializer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+{
+}
+
+impl<const SIZE: usize, const CENTROID_SIZE: usize, const QUANTIZED_SIZE: usize, C> Default
+    for PqDerivedDomainInitializer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+{
+    fn default() -> Self {
+        Self { _x: PhantomData }
+    }
 }
 
 impl<
@@ -213,17 +275,16 @@ impl<
         C: 'static
             + Comparator<T = [f32; CENTROID_SIZE]>
             + CentroidComparatorConstructor
-            + Serializable<Params = ()>,
-    > NewDeriver for PqDerivedDomainInitializer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+            + Serializable<Params = ()>
+            + Send,
+    > DerivedDomainInitializer<[f32; SIZE]>
+    for PqDerivedDomainInitializer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
 {
-    type T = [f32; SIZE];
-    type Deriver = PqDerivedDomain<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>;
-
-    fn new(
+    fn initialize(
         &self,
         path: PathBuf,
         vectors: &VectorFile<[f32; SIZE]>,
-    ) -> Result<Self::Deriver, Box<dyn Error>> {
+    ) -> Result<Arc<dyn Deriver<From = [f32; SIZE]> + Send + Sync>, Box<dyn Error>> {
         // TODO do something else for sizes close to number of vecs
         const NUMBER_OF_CENTROIDS: usize = 10_000;
         const SAMPLE_SIZE: usize = NUMBER_OF_CENTROIDS / 10;
@@ -297,12 +358,14 @@ impl<
         centroid_quantizer.serialize(quantizer_path)?;
 
         let quantized_path = path.join("quantized.vecs");
-        let quantized_file = VectorFile::create(quantized_path, true)?;
+        let quantized_file: VectorFile<[u16; QUANTIZED_SIZE]> =
+            VectorFile::create(quantized_path, true)?;
 
-        Ok(PqDerivedDomain {
+        let deriver = PqDerivedDomain {
             file: RwLock::new(quantized_file),
             quantizer: centroid_quantizer,
-        })
+        };
+        Ok(Arc::new(deriver))
     }
 }
 
@@ -407,13 +470,10 @@ impl<T: Copy + 'static> Domain<T> {
         self.file().vector_chunks(chunk_size)
     }
 
-    pub fn create_derived<
-        N: NewDeriver<T = T, Deriver = D>,
-        D: Deriver<From = T> + 'static + Send + Sync,
-    >(
+    pub fn create_derived<N: DerivedDomainInitializer<T>>(
         &self,
         name: String,
-        deriver: N,
+        derived_domain_initializer: N,
     ) -> Result<(), Box<dyn Error>> {
         // first, let's take a read lock on the internal file to stop
         // others from doing things to this domain.
@@ -435,7 +495,7 @@ impl<T: Copy + 'static> Domain<T> {
 
         // write a config so we can recognize later on what this domain is
         let config_path = path.join("config.json");
-        let deriver = deriver.new(path, &*file)?;
+        let deriver = derived_domain_initializer.initialize(path, &*file)?;
         let config = deriver.configuration();
         let config_string = serde_json::to_string(&config).unwrap();
         std::fs::write(config_path, config_string)?;
@@ -443,12 +503,12 @@ impl<T: Copy + 'static> Domain<T> {
         // convert all already-existing vectors to this domain
         deriver.concatenate_file(&*file)?;
 
-        derived_domains.insert(name, Arc::new(deriver));
+        derived_domains.insert(name, deriver);
 
         Ok(())
     }
 
-    pub fn derived_domain<'a, T2: Deriver + Send + Sync>(
+    pub fn get_derived<'a, T2: Deriver + Send + Sync>(
         &'a self,
         name: &str,
     ) -> Option<impl Deref<Target = T2> + 'a> {
