@@ -45,6 +45,11 @@ pub trait Deriver: Any {
     type From: Copy;
 
     fn concatenate_derived(&self, loader: SequentialVectorLoader<Self::From>) -> io::Result<()>;
+    fn concatenate_file(&self, file: &VectorFile<Self::From>) -> io::Result<()> {
+        self.concatenate_derived(file.vector_chunks(self.chunk_size())?);
+
+        Ok(())
+    }
     fn configuration(&self) -> DerivedDomainConfiguration;
     fn chunk_size(&self) -> usize {
         1_000
@@ -378,8 +383,7 @@ impl<T: Copy + 'static> Domain<T> {
         let old_size = self.num_vecs();
         let derived_domains = self.derived_domains.read().unwrap();
         for derived in derived_domains.values() {
-            let chunk_size = derived.chunk_size();
-            derived.concatenate_derived(read_vector_file.vector_chunks(chunk_size)?)?;
+            derived.concatenate_file(&read_vector_file)?;
         }
         Ok((
             old_size,
@@ -411,23 +415,34 @@ impl<T: Copy + 'static> Domain<T> {
         name: String,
         deriver: N,
     ) -> Result<(), Box<dyn Error>> {
+        // first, let's take a read lock on the internal file to stop
+        // others from doing things to this domain.
+        // Makes deadlocks less likely as the only hold-and-wait
+        // pattern then remaining has to involve both file and derived
+        // domains.
+        let file = self.file();
         let mut derived_domains = self.derived_domains.write().unwrap();
         assert!(
             !derived_domains.contains_key(&name),
             "tried to create derived domain that already exists"
         );
 
-        let file = self.file();
+        // create a directory for this derived domain
         let mut path = file.path().clone();
         path.set_extension("derived");
         path.push(&name);
         std::fs::create_dir_all(&path)?;
 
+        // write a config so we can recognize later on what this domain is
         let config_path = path.join("config.json");
         let deriver = deriver.new(path, &*file)?;
         let config = deriver.configuration();
         let config_string = serde_json::to_string(&config).unwrap();
         std::fs::write(config_path, config_string)?;
+
+        // convert all already-existing vectors to this domain
+        deriver.concatenate_file(&*file)?;
+
         derived_domains.insert(name, Arc::new(deriver));
 
         Ok(())
