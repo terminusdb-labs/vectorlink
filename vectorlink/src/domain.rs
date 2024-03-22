@@ -174,28 +174,22 @@ impl DerivedDomainConfiguration {
         &self,
         path: P,
     ) -> Result<Arc<dyn Deriver<From = T> + Send + Sync + 'static>, io::Error> {
+        let vecs_path = path.as_ref().join("quantized.vecs");
+        let quantizer_path = path.as_ref().join("quantizer");
         match self {
             Self::SmallPq => {
-                let file = RwLock::new(VectorFile::open(
-                    path.as_ref().join("quantized.vecs"),
-                    true,
-                )?);
-                // panic here if T is not what we expect
-                let quantizer: HnswQuantizer16 =
-                    HnswQuantizer::deserialize(path, ()).expect("TODO");
+                let file = RwLock::new(VectorFile::open(&vecs_path, true)?);
+                let quantizer: HnswQuantizer16 = HnswQuantizer::deserialize(&quantizer_path, ())
+                    .expect("hnsw deserialization failed (small)");
 
                 let domain: PqDerivedDomain16 = PqDerivedDomain { file, quantizer };
 
                 Ok(domain.as_arc::<T>().unwrap())
             }
             Self::LargePq => {
-                let file = RwLock::new(VectorFile::open(
-                    path.as_ref().join("quantized.vecs"),
-                    true,
-                )?);
-                // panic here if T is not what we expect
-                let quantizer: HnswQuantizer32 =
-                    HnswQuantizer::deserialize(path, ()).expect("TODO");
+                let file = RwLock::new(VectorFile::open(&vecs_path, true)?);
+                let quantizer: HnswQuantizer32 = HnswQuantizer::deserialize(&quantizer_path, ())
+                    .expect("hnsw deserialization failed (large)");
 
                 let domain: PqDerivedDomain32 = PqDerivedDomain { file, quantizer };
 
