@@ -460,7 +460,7 @@ impl Service {
             let index_path = index_serialization_path(path, index_id);
             Ok(Arc::new(OpenAIHnsw::deserialize(
                 index_path,
-                self.vector_store.clone(),
+                &self.vector_store,
             )?))
         }
     }

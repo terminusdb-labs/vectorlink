@@ -27,7 +27,6 @@ use domain::DerivedDomainConfiguration;
 //use hnsw::Hnsw;
 use openai::Model;
 use parallel_hnsw::pq::Quantizer;
-use parallel_hnsw::pq::VectorSelector;
 use parallel_hnsw::AbstractVector;
 use parallel_hnsw::Comparator;
 use parallel_hnsw::Serializable;

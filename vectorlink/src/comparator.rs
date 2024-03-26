@@ -1,23 +1,17 @@
-use parallel_hnsw::pq::{
-    CentroidComparatorConstructor, HnswQuantizer, PartialDistance, QuantizedComparatorConstructor,
-};
-use rand::distributions::Uniform;
-use rand::{thread_rng, Rng};
+use parallel_hnsw::pq::{HnswQuantizer, PartialDistance, Quantizer};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::fs::OpenOptions;
-use std::io::{Read, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::marker::PhantomData;
-use std::path::PathBuf;
 use std::{path::Path, sync::Arc};
 
-use parallel_hnsw::{pq, Comparator, Serializable, SerializationError, VectorId};
+use parallel_hnsw::{Comparator, Serializable, SerializationError, VectorId};
 
+use crate::domain::PqDerivedDomainInfo;
 use crate::store::{ImmutableVectorFile, LoadedVectorRange, VectorFile};
 use crate::vecmath::{
-    self, EuclideanDistance16, EuclideanDistance32, Quantized16Embedding, Quantized32Embedding,
-    CENTROID_16_LENGTH, CENTROID_32_LENGTH, EMBEDDING_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH,
-    QUANTIZED_32_EMBEDDING_LENGTH,
+    self, EuclideanDistance16, EuclideanDistance32, CENTROID_16_LENGTH, CENTROID_32_LENGTH,
+    EMBEDDING_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH, QUANTIZED_32_EMBEDDING_LENGTH,
 };
 use crate::{
     vecmath::{normalized_cosine_distance, Embedding},
@@ -72,7 +66,7 @@ impl Serializable for DiskOpenAIComparator {
 
     fn deserialize<P: AsRef<Path>>(
         path: P,
-        store: Arc<VectorStore>,
+        store: &Arc<VectorStore>,
     ) -> Result<Self, SerializationError> {
         let mut comparator_file = OpenOptions::new().read(true).open(path)?;
         let mut contents = String::new();
@@ -83,35 +77,6 @@ impl Serializable for DiskOpenAIComparator {
             domain: domain.name().to_owned(),
             vectors: Arc::new(domain.immutable_file()),
         })
-    }
-}
-
-impl pq::VectorSelector for DiskOpenAIComparator {
-    type T = Embedding;
-
-    fn selection(&self, size: usize) -> Vec<Self::T> {
-        // TODO do something else for sizes close to number of vecs
-        if size >= self.vectors.num_vecs() {
-            return self.vectors.all_vectors().unwrap().clone().into_vec();
-        }
-        let mut rng = thread_rng();
-        let mut set = HashSet::new();
-        let range = Uniform::from(0_usize..self.vectors.num_vecs());
-        while set.len() != size {
-            let candidate = rng.sample(&range);
-            set.insert(candidate);
-        }
-
-        set.into_iter()
-            .map(|index| self.vectors.vec(index).unwrap())
-            .collect()
-    }
-
-    fn vector_chunks(&self) -> impl Iterator<Item = Vec<Self::T>> {
-        self.vectors
-            .vector_chunks(1_000_000)
-            .unwrap()
-            .map(|x| x.unwrap())
     }
 }
 
@@ -166,7 +131,7 @@ impl Serializable for OpenAIComparator {
 
     fn deserialize<P: AsRef<Path>>(
         path: P,
-        store: Arc<VectorStore>,
+        store: &Arc<VectorStore>,
     ) -> Result<Self, SerializationError> {
         let mut comparator_file = OpenOptions::new().read(true).open(path)?;
         let mut contents = String::new();
@@ -230,6 +195,17 @@ pub struct ArrayCentroidComparator<const N: usize, C> {
     calculator: PhantomData<C>,
 }
 
+impl<const N: usize, C: DistanceCalculator<T = [f32; N]> + Default> ArrayCentroidComparator<N, C> {
+    pub fn new(centroids: Vec<[f32; N]>) -> Self {
+        let len = centroids.len();
+        Self {
+            distances: Arc::new(MemoizedPartialDistances::new(C::default(), &centroids)),
+            centroids: Arc::new(LoadedVectorRange::new(centroids, 0..len)),
+            calculator: PhantomData,
+        }
+    }
+}
+
 impl<const N: usize, C> Clone for ArrayCentroidComparator<N, C> {
     fn clone(&self) -> Self {
         Self {
@@ -243,19 +219,6 @@ unsafe impl<const N: usize, C> Sync for ArrayCentroidComparator<N, C> {}
 
 pub type Centroid16Comparator = ArrayCentroidComparator<CENTROID_16_LENGTH, EuclideanDistance16>;
 pub type Centroid32Comparator = ArrayCentroidComparator<CENTROID_32_LENGTH, EuclideanDistance32>;
-
-impl<const SIZE: usize, C: DistanceCalculator<T = [f32; SIZE]> + Default>
-    CentroidComparatorConstructor for ArrayCentroidComparator<SIZE, C>
-{
-    fn new(centroids: Vec<Self::T>) -> Self {
-        let len = centroids.len();
-        Self {
-            distances: Arc::new(MemoizedPartialDistances::new(C::default(), &centroids)),
-            centroids: Arc::new(LoadedVectorRange::new(centroids, 0..len)),
-            calculator: PhantomData,
-        }
-    }
-}
 
 impl<const SIZE: usize, C: DistanceCalculator<T = [f32; SIZE]> + Default> Comparator
     for ArrayCentroidComparator<SIZE, C>
@@ -294,7 +257,7 @@ impl<const N: usize, C: DistanceCalculator<T = [f32; N]> + Default> Serializable
 
     fn deserialize<P: AsRef<Path>>(
         path: P,
-        _params: Self::Params,
+        _params: &Self::Params,
     ) -> Result<Self, SerializationError> {
         let vector_file: VectorFile<[f32; N]> = VectorFile::open(path, true)?;
         let centroids = Arc::new(vector_file.all_vectors()?);
@@ -310,174 +273,165 @@ impl<const N: usize, C: DistanceCalculator<T = [f32; N]> + Default> Serializable
     }
 }
 
-#[derive(Clone)]
-pub struct Quantized32Comparator {
-    pub cc: Centroid32Comparator,
-    pub data: Arc<LoadedVectorRange<Quantized32Embedding>>,
+pub struct QuantizedDomainComparator<
+    const SIZE: usize,
+    const CENTROID_SIZE: usize,
+    const QUANTIZED_SIZE: usize,
+    C,
+> {
+    domain: String,
+    subdomain: String,
+    cc: ArrayCentroidComparator<CENTROID_SIZE, C>,
+    data: Arc<LoadedVectorRange<[u16; QUANTIZED_SIZE]>>,
 }
 
-impl QuantizedComparatorConstructor for Quantized32Comparator {
-    type CentroidComparator = Centroid32Comparator;
-
-    fn new(cc: &Self::CentroidComparator) -> Self {
-        Self {
-            cc: cc.clone(),
-            data: Default::default(),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct Quantized16Comparator {
-    pub cc: Centroid16Comparator,
-    pub data: Arc<LoadedVectorRange<Quantized16Embedding>>,
-}
-
-impl QuantizedComparatorConstructor for Quantized16Comparator {
-    type CentroidComparator = Centroid16Comparator;
-
-    fn new(cc: &Self::CentroidComparator) -> Self {
-        Self {
-            cc: cc.clone(),
-            data: Default::default(),
-        }
-    }
-}
-
-impl PartialDistance for Quantized32Comparator {
-    fn partial_distance(&self, i: u16, j: u16) -> f32 {
-        self.cc.partial_distance(i, j)
-    }
-}
-
-impl PartialDistance for Quantized16Comparator {
-    fn partial_distance(&self, i: u16, j: u16) -> f32 {
-        self.cc.partial_distance(i, j)
-    }
-}
-
-impl Comparator for Quantized32Comparator
-where
-    Quantized32Comparator: PartialDistance,
+impl<const SIZE: usize, const CENTROID_SIZE: usize, const QUANTIZED_SIZE: usize, C> Clone
+    for QuantizedDomainComparator<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
 {
-    type T = Quantized32Embedding;
-
-    type Borrowable<'a> = &'a Quantized32Embedding;
-
-    fn lookup(&self, v: VectorId) -> Self::Borrowable<'_> {
-        &self.data[v.0]
-    }
-
-    fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
-        let mut partial_distances = [0.0_f32; QUANTIZED_32_EMBEDDING_LENGTH];
-        for ix in 0..QUANTIZED_32_EMBEDDING_LENGTH {
-            let partial_1 = v1[ix];
-            let partial_2 = v2[ix];
-            let partial_distance = self.cc.partial_distance(partial_1, partial_2);
-            partial_distances[ix] = partial_distance;
+    fn clone(&self) -> Self {
+        Self {
+            domain: self.domain.clone(),
+            subdomain: self.subdomain.clone(),
+            cc: self.cc.clone(),
+            data: self.data.clone(),
         }
-
-        vecmath::sum_48(&partial_distances).sqrt()
     }
 }
 
-impl Serializable for Quantized32Comparator {
-    type Params = ();
+pub type Quantized16Comparator = QuantizedDomainComparator<
+    EMBEDDING_LENGTH,
+    CENTROID_16_LENGTH,
+    QUANTIZED_16_EMBEDDING_LENGTH,
+    EuclideanDistance16,
+>;
+pub type Quantized32Comparator = QuantizedDomainComparator<
+    EMBEDDING_LENGTH,
+    CENTROID_32_LENGTH,
+    QUANTIZED_32_EMBEDDING_LENGTH,
+    EuclideanDistance32,
+>;
+
+#[derive(Serialize, Deserialize)]
+struct QuantizedDomainComparatorMeta {
+    domain: String,
+    subdomain: String,
+}
+
+impl<
+        const SIZE: usize,
+        const CENTROID_SIZE: usize,
+        const QUANTIZED_SIZE: usize,
+        C: 'static + DistanceCalculator<T = [f32; CENTROID_SIZE]>,
+    > QuantizedDomainComparator<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+where
+    ArrayCentroidComparator<CENTROID_SIZE, C>: 'static + Comparator<T = [f32; CENTROID_SIZE]>,
+{
+    pub fn load(store: &VectorStore, domain: String, subdomain: String) -> io::Result<Self> {
+        assert_eq!(SIZE, CENTROID_SIZE * QUANTIZED_SIZE); // TODO compile-time macro check this
+        let domain_info = store.get_domain(&domain)?;
+        let derived_domain_info: PqDerivedDomainInfo<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C> =
+            domain_info
+                .get_derived_domain_info(&subdomain)
+                .expect("pq subdomain not found");
+
+        Ok(Self {
+            domain,
+            subdomain,
+            cc: derived_domain_info.quantizer.quantizer.comparator().clone(),
+            data: Arc::new(derived_domain_info.file.all_vectors()?),
+        })
+    }
+}
+impl<
+        const SIZE: usize,
+        const CENTROID_SIZE: usize,
+        const QUANTIZED_SIZE: usize,
+        C: 'static + DistanceCalculator<T = [f32; CENTROID_SIZE]>,
+    > PartialDistance for QuantizedDomainComparator<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+where
+    ArrayCentroidComparator<CENTROID_SIZE, C>: 'static + Comparator<T = [f32; CENTROID_SIZE]>,
+{
+    fn partial_distance(&self, i: u16, j: u16) -> f32 {
+        self.cc.partial_distance(i, j)
+    }
+}
+
+impl<
+        const SIZE: usize,
+        const CENTROID_SIZE: usize,
+        const QUANTIZED_SIZE: usize,
+        C: 'static + DistanceCalculator<T = [f32; CENTROID_SIZE]>,
+    > Serializable for QuantizedDomainComparator<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+where
+    ArrayCentroidComparator<CENTROID_SIZE, C>: 'static + Comparator<T = [f32; CENTROID_SIZE]>,
+{
+    type Params = Arc<VectorStore>;
 
     fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
-        let path_buf: PathBuf = path.as_ref().into();
-        std::fs::create_dir_all(&path_buf)?;
+        let meta = QuantizedDomainComparatorMeta {
+            domain: self.domain.clone(),
+            subdomain: self.subdomain.clone(),
+        };
+        let meta_string = serde_json::to_string(&meta)?;
+        std::fs::write(path, meta_string)?;
 
-        let index_path = path_buf.join("index");
-        self.cc.serialize(index_path)?;
-
-        let vector_path = path_buf.join("vectors");
-        let mut vector_file = VectorFile::open(vector_path, true)?;
-        vector_file.append_vector_range(self.data.vecs())?;
         Ok(())
     }
 
     fn deserialize<P: AsRef<Path>>(
         path: P,
-        _params: Self::Params,
+        params: &Self::Params,
     ) -> Result<Self, SerializationError> {
-        let path_buf: PathBuf = path.as_ref().into();
-        let index_path = path_buf.join("index");
-        let cc = Centroid32Comparator::deserialize(index_path, ())?;
+        let comparator_file = OpenOptions::new().read(true).open(path)?;
+        let QuantizedDomainComparatorMeta { domain, subdomain } =
+            serde_json::from_reader(BufReader::new(comparator_file))?;
 
-        let vector_path = path_buf.join("vectors");
-        let vector_file = VectorFile::open(vector_path, true)?;
-        let range = vector_file.all_vectors()?;
-
-        let data = Arc::new(range);
-        Ok(Self { cc, data })
+        Ok(Self::load(&params, domain, subdomain)?)
     }
 }
 
-impl pq::VectorStore for Quantized32Comparator {
-    type T = <Quantized32Comparator as Comparator>::T;
+pub type QuantizedDomainComparator16 = QuantizedDomainComparator<
+    EMBEDDING_LENGTH,
+    CENTROID_16_LENGTH,
+    QUANTIZED_16_EMBEDDING_LENGTH,
+    Centroid16Comparator,
+>;
+pub type QuantizedDomainComparator32 = QuantizedDomainComparator<
+    EMBEDDING_LENGTH,
+    CENTROID_32_LENGTH,
+    QUANTIZED_32_EMBEDDING_LENGTH,
+    Centroid32Comparator,
+>;
 
-    fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
-        // this is p retty stupid, but then, these comparators should not be storing in the first place
-        let mut new_contents: Vec<Self::T> = Vec::with_capacity(self.data.len() + i.size_hint().0);
-        new_contents.extend(self.data.vecs().iter());
-        let vid = self.data.len();
-        let mut vectors: Vec<VectorId> = Vec::new();
-        new_contents.extend(i.enumerate().map(|(i, v)| {
-            vectors.push(VectorId(vid + i));
-            v
-        }));
-        let end = new_contents.len();
-
-        let data = LoadedVectorRange::new(new_contents, 0..end);
-        self.data = Arc::new(data);
-
-        vectors
-    }
-}
-
-impl pq::VectorSelector for OpenAIComparator {
-    type T = Embedding;
-
-    fn selection(&self, size: usize) -> Vec<Self::T> {
-        // TODO do something else for sizes close to number of vecs
-        let mut rng = thread_rng();
-        let mut set = HashSet::new();
-        let range = Uniform::from(0_usize..size);
-        while set.len() != size {
-            let candidate = rng.sample(&range);
-            set.insert(candidate);
-        }
-
-        set.into_iter()
-            .map(|index| *self.range.vec(index))
-            .collect()
-    }
-
-    fn vector_chunks(&self) -> impl Iterator<Item = Vec<Self::T>> {
-        // low quality make better
-        self.range.vecs().chunks(1_000_000).map(|c| c.to_vec())
-    }
-}
-
-impl Comparator for Quantized16Comparator
-where
-    Quantized16Comparator: PartialDistance,
+pub struct QuantizedEmbeddingSizeCombination<
+    const CENTROID_SIZE: usize,
+    const QUANTIZED_SIZE: usize,
+>;
+pub trait ImplementedQuantizedEmbeddingSizeCombination<
+    const CENTROID_SIZE: usize,
+    const QUANTIZED_SIZE: usize,
+>
 {
-    type T = Quantized16Embedding;
+    fn compare_quantized<C: PartialDistance>(
+        comparator: &C,
+        v1: &[u16; QUANTIZED_SIZE],
+        v2: &[u16; QUANTIZED_SIZE],
+    ) -> f32;
+}
 
-    type Borrowable<'a> = &'a Self::T;
-
-    fn lookup(&self, v: VectorId) -> Self::Borrowable<'_> {
-        self.data.vec(v.0)
-    }
-
-    fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
+impl ImplementedQuantizedEmbeddingSizeCombination<CENTROID_16_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH>
+    for QuantizedEmbeddingSizeCombination<CENTROID_16_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH>
+{
+    fn compare_quantized<C: PartialDistance>(
+        comparator: &C,
+        v1: &[u16; QUANTIZED_16_EMBEDDING_LENGTH],
+        v2: &[u16; QUANTIZED_16_EMBEDDING_LENGTH],
+    ) -> f32 {
         let mut partial_distances = [0.0_f32; QUANTIZED_16_EMBEDDING_LENGTH];
         for ix in 0..QUANTIZED_16_EMBEDDING_LENGTH {
             let partial_1 = v1[ix];
             let partial_2 = v2[ix];
-            let partial_distance = self.cc.partial_distance(partial_1, partial_2);
+            let partial_distance = comparator.partial_distance(partial_1, partial_2);
             partial_distances[ix] = partial_distance;
         }
 
@@ -485,59 +439,44 @@ where
     }
 }
 
-impl Serializable for Quantized16Comparator {
-    type Params = ();
+impl ImplementedQuantizedEmbeddingSizeCombination<CENTROID_32_LENGTH, QUANTIZED_32_EMBEDDING_LENGTH>
+    for QuantizedEmbeddingSizeCombination<CENTROID_32_LENGTH, QUANTIZED_32_EMBEDDING_LENGTH>
+{
+    fn compare_quantized<C: PartialDistance>(
+        comparator: &C,
+        v1: &[u16; QUANTIZED_32_EMBEDDING_LENGTH],
+        v2: &[u16; QUANTIZED_32_EMBEDDING_LENGTH],
+    ) -> f32 {
+        let mut partial_distances = [0.0_f32; QUANTIZED_32_EMBEDDING_LENGTH];
+        for ix in 0..QUANTIZED_32_EMBEDDING_LENGTH {
+            let partial_1 = v1[ix];
+            let partial_2 = v2[ix];
+            let partial_distance = comparator.partial_distance(partial_1, partial_2);
+            partial_distances[ix] = partial_distance;
+        }
 
-    fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
-        let path_buf: PathBuf = path.as_ref().into();
-        std::fs::create_dir_all(&path_buf)?;
-
-        let index_path = path_buf.join("index");
-        self.cc.serialize(index_path)?;
-
-        let vector_path = path_buf.join("vectors");
-        let mut vector_file = VectorFile::create(vector_path, true)?;
-        vector_file.append_vector_range(self.data.vecs())?;
-        Ok(())
-    }
-
-    fn deserialize<P: AsRef<Path>>(
-        path: P,
-        _params: Self::Params,
-    ) -> Result<Self, SerializationError> {
-        let path_buf: PathBuf = path.as_ref().into();
-        let index_path = path_buf.join("index");
-        let cc = Centroid16Comparator::deserialize(index_path, ())?;
-
-        let vector_path = path_buf.join("vectors");
-        let vector_file = VectorFile::open(vector_path, true)?;
-        let range = vector_file.all_vectors()?;
-
-        let data = Arc::new(range);
-        Ok(Self { cc, data })
+        vecmath::sum_48(&partial_distances).sqrt()
     }
 }
 
-impl pq::VectorStore for Quantized16Comparator {
-    type T = <Quantized16Comparator as Comparator>::T;
+impl<const SIZE: usize, const CENTROID_SIZE: usize, const QUANTIZED_SIZE: usize, C: 'static>
+    Comparator for QuantizedDomainComparator<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+where
+    QuantizedEmbeddingSizeCombination<CENTROID_SIZE, QUANTIZED_SIZE>:
+        ImplementedQuantizedEmbeddingSizeCombination<CENTROID_SIZE, QUANTIZED_SIZE>,
+{
+    type T = [u16; QUANTIZED_SIZE];
 
-    fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
-        // this is p retty stupid, but then, these comparators should not be storing in the first place
-        let mut new_contents: Vec<Self::T> = Vec::with_capacity(self.data.len() + i.size_hint().0);
-        new_contents.extend(self.data.vecs().iter());
-        let vid = self.data.len();
-        let mut vectors: Vec<VectorId> = Vec::new();
-        new_contents.extend(i.enumerate().map(|(i, v)| {
-            vectors.push(VectorId(vid + i));
-            v
-        }));
+    type Borrowable<'a> = &'a [u16; QUANTIZED_SIZE];
 
-        let end = new_contents.len();
+    fn lookup(&self, v: VectorId) -> Self::Borrowable<'_> {
+        &self.data[v.0]
+    }
 
-        let data = LoadedVectorRange::new(new_contents, 0..end);
-        self.data = Arc::new(data);
-
-        vectors
+    fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
+        QuantizedEmbeddingSizeCombination::<CENTROID_SIZE, QUANTIZED_SIZE>::compare_quantized(
+            &self.cc, v1, v2,
+        )
     }
 }
 
@@ -553,6 +492,90 @@ pub type HnswQuantizer32 = HnswQuantizer<
     QUANTIZED_32_EMBEDDING_LENGTH,
     Centroid32Comparator,
 >;
+
+pub struct DomainQuantizer<
+    const SIZE: usize,
+    const CENTROID_SIZE: usize,
+    const QUANTIZED_SIZE: usize,
+    C,
+> {
+    domain: String,
+    derived_domain: String,
+    quantizer: Arc<
+        HnswQuantizer<
+            SIZE,
+            CENTROID_SIZE,
+            QUANTIZED_SIZE,
+            ArrayCentroidComparator<CENTROID_SIZE, C>,
+        >,
+    >,
+}
+
+impl<const SIZE: usize, const CENTROID_SIZE: usize, const QUANTIZED_SIZE: usize, C: 'static> Clone
+    for DomainQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+{
+    fn clone(&self) -> Self {
+        Self {
+            domain: self.domain.clone(),
+            derived_domain: self.derived_domain.clone(),
+            quantizer: self.quantizer.clone(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DomainQuantizerMeta {
+    domain: String,
+    derived_domain: String,
+}
+
+impl<const SIZE: usize, const CENTROID_SIZE: usize, const QUANTIZED_SIZE: usize, C: 'static>
+    Quantizer<SIZE, QUANTIZED_SIZE> for DomainQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+where
+    ArrayCentroidComparator<CENTROID_SIZE, C>: Comparator<T = [f32; CENTROID_SIZE]>,
+{
+    fn quantize(&self, vec: &[f32; SIZE]) -> [u16; QUANTIZED_SIZE] {
+        self.quantizer.quantize(vec)
+    }
+
+    fn reconstruct(&self, qvec: &[u16; QUANTIZED_SIZE]) -> [f32; SIZE] {
+        self.quantizer.reconstruct(qvec)
+    }
+}
+
+impl<const SIZE: usize, const CENTROID_SIZE: usize, const QUANTIZED_SIZE: usize, C: 'static>
+    Serializable for DomainQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+{
+    type Params = Arc<VectorStore>;
+
+    fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
+        let meta = DomainQuantizerMeta {
+            domain: self.domain.clone(),
+            derived_domain: self.derived_domain.clone(),
+        };
+        let data = serde_json::to_string(&meta)?;
+        std::fs::write(path, data)?;
+
+        Ok(())
+    }
+
+    fn deserialize<P: AsRef<Path>>(
+        path: P,
+        params: &Self::Params,
+    ) -> Result<Self, SerializationError> {
+        let DomainQuantizerMeta {
+            domain,
+            derived_domain,
+        } = serde_json::from_reader(BufReader::new(std::fs::File::open(path)?))?;
+
+        let d = params.get_domain(&domain).expect("domain not found");
+        let dd: PqDerivedDomainInfo<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C> = d
+            .get_derived_domain_info(&derived_domain)
+            .expect("derived domain not found");
+
+        Ok(dd.quantizer.clone())
+    }
+}
 
 #[cfg(test)]
 mod tests {

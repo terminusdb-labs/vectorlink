@@ -20,9 +20,11 @@ use urlencoding::encode;
 
 use crate::{
     comparator::{
-        Centroid16Comparator, DiskOpenAIComparator, OpenAIComparator, Quantized16Comparator,
+        Centroid16Comparator, DiskOpenAIComparator, DomainQuantizer, HnswQuantizer16,
+        OpenAIComparator, Quantized16Comparator,
     },
     configuration::HnswConfiguration,
+    domain::{PqDerivedDomainInfo16, PqDerivedDomainInitializer16},
     indexer::{create_index_name, index_serialization_path},
     openai::{embeddings_for, EmbeddingError, Model},
     server::Operation,
@@ -168,7 +170,7 @@ pub async fn index_using_operations_and_vectors<
     op_file_path: P2,
     size: usize,
     id_offset: u64,
-    quantize_hnsw: bool,
+    quantize_hnsw: Option<&str>,
     model: Model,
 ) -> Result<(), IndexingError> {
     // Start at last hnsw offset
@@ -235,20 +237,37 @@ pub async fn index_using_operations_and_vectors<
         .collect();
 
     eprintln!("ready to generate hnsw");
-    let hnsw = if quantize_hnsw {
+    let hnsw = if let Some(pq_name) = quantize_hnsw {
         let number_of_vectors = NUMBER_OF_CENTROIDS / 10;
         let c = DiskOpenAIComparator::new(
             domain_obj.name().to_owned(),
             Arc::new(domain_obj.immutable_file()),
         );
+
+        let derived_domain_info = domain_obj.get_derived_domain_info(pq_name);
+        if derived_domain_info.is_none() {
+            eprintln!("pq derived domain ({pq_name}) doesn't exist yet. constructing now");
+            domain_obj
+                .create_derived(pq_name.to_string(), PqDerivedDomainInitializer16::default())
+                .unwrap(); // TODO
+        }
+        // lazy - we just look it up again and now it should exist
+        let derived_domain_info: PqDerivedDomainInfo16 =
+            domain_obj.get_derived_domain_info(pq_name).unwrap();
+
+        let quantizer = derived_domain_info.quantizer.clone());
+
+        let quantized_comparator =
+            Quantized16Comparator::load(&vs, domain.to_string(), pq_name.to_string())?;
+
         let hnsw: QuantizedHnsw<
             EMBEDDING_LENGTH,
             CENTROID_16_LENGTH,
             QUANTIZED_16_EMBEDDING_LENGTH,
-            Centroid16Comparator,
             Quantized16Comparator,
             DiskOpenAIComparator,
-        > = QuantizedHnsw::new(number_of_vectors, c);
+            Arc<HnswQuantizer16>,
+        > = QuantizedHnsw::generate(quantizer, quantized_comparator, c, vecs);
         HnswConfiguration::SmallQuantizedOpenAi(model, hnsw)
     } else {
         let hnsw = Hnsw::generate(comparator, vecs, 24, 48, 12);

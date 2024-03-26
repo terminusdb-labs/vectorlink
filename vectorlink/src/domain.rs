@@ -14,7 +14,7 @@ use linfa::{traits::Fit, DatasetBase};
 use linfa_clustering::KMeans;
 use ndarray::{Array, Array2};
 use parallel_hnsw::{
-    pq::{CentroidComparatorConstructor, HnswQuantizer, Quantizer},
+    pq::{HnswQuantizer, Quantizer},
     Comparator, Hnsw, Serializable, VectorId,
 };
 use rand::{distributions::Uniform, rngs::StdRng, thread_rng, Rng, SeedableRng};
@@ -22,11 +22,15 @@ use serde::{Deserialize, Serialize};
 use urlencoding::encode;
 
 use crate::{
-    comparator::{Centroid16Comparator, Centroid32Comparator, HnswQuantizer16, HnswQuantizer32},
+    comparator::{
+        ArrayCentroidComparator, DistanceCalculator, DomainQuantizer, HnswQuantizer16,
+        HnswQuantizer32,
+    },
     store::{ImmutableVectorFile, LoadedVectorRange, SequentialVectorLoader, VectorFile},
     vecmath::{
-        Embedding, CENTROID_16_LENGTH, CENTROID_32_LENGTH, EMBEDDING_LENGTH,
-        QUANTIZED_16_EMBEDDING_LENGTH, QUANTIZED_32_EMBEDDING_LENGTH,
+        Embedding, EuclideanDistance16, EuclideanDistance32, CENTROID_16_LENGTH,
+        CENTROID_32_LENGTH, EMBEDDING_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH,
+        QUANTIZED_32_EMBEDDING_LENGTH,
     },
 };
 
@@ -46,16 +50,19 @@ pub trait Deriver: Any {
     type From: Copy;
 
     fn concatenate_derived(&self, loader: SequentialVectorLoader<Self::From>) -> io::Result<()>;
+    fn configuration(&self) -> DerivedDomainConfiguration;
+    fn get_derived_domain_info(&self) -> Box<dyn DerivedDomainInfo>;
     fn concatenate_file(&self, file: &VectorFile<Self::From>) -> io::Result<()> {
         self.concatenate_derived(file.vector_chunks(self.chunk_size())?)?;
 
         Ok(())
     }
-    fn configuration(&self) -> DerivedDomainConfiguration;
     fn chunk_size(&self) -> usize {
         1_000
     }
 }
+
+pub trait DerivedDomainInfo: Any {}
 
 pub trait DerivedDomainInitializer<From> {
     fn initialize(
@@ -85,15 +92,17 @@ pub struct PqDerivedDomain<
     C,
 > {
     file: RwLock<VectorFile<[u16; QUANTIZED_SIZE]>>,
-    quantizer: HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>,
+    quantizer: DomainQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>,
 }
 
 impl<
         const SIZE: usize,
         const CENTROID_SIZE: usize,
         const QUANTIZED_SIZE: usize,
-        C: 'static + Comparator<T = [f32; CENTROID_SIZE]>,
+        C: 'static + DistanceCalculator<T = [f32; CENTROID_SIZE]>,
     > PqDerivedDomain<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+where
+    ArrayCentroidComparator<CENTROID_SIZE, C>: 'static + Comparator<T = [f32; CENTROID_SIZE]>,
 {
     fn as_arc<T: Copy + 'static>(
         self,
@@ -117,8 +126,10 @@ impl<
         const SIZE: usize,
         const CENTROID_SIZE: usize,
         const QUANTIZED_SIZE: usize,
-        C: 'static + Comparator<T = [f32; CENTROID_SIZE]>,
+        C: 'static + DistanceCalculator<T = [f32; CENTROID_SIZE]>,
     > Deriver for PqDerivedDomain<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+where
+    ArrayCentroidComparator<CENTROID_SIZE, C>: 'static + Comparator<T = [f32; CENTROID_SIZE]>,
 {
     type From = [f32; SIZE];
 
@@ -148,19 +159,66 @@ impl<
             _ => panic!("unserializable pq derived domain"),
         }
     }
+
+    fn get_derived_domain_info(&self) -> Box<dyn DerivedDomainInfo> {
+        let info = PqDerivedDomainInfo {
+            file: self.file.read().unwrap().as_immutable(),
+            quantizer: self.quantizer.clone(),
+        };
+        Box::new(info)
+    }
 }
 
+pub struct PqDerivedDomainInfo<
+    const SIZE: usize,
+    const CENTROID_SIZE: usize,
+    const QUANTIZED_SIZE: usize,
+    C,
+> {
+    pub file: ImmutableVectorFile<[u16; QUANTIZED_SIZE]>,
+    pub quantizer: DomainQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>,
+}
+
+impl<const SIZE: usize, const CENTROID_SIZE: usize, const QUANTIZED_SIZE: usize, C: 'static>
+    DerivedDomainInfo for PqDerivedDomainInfo<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+{
+}
+
+pub type PqDerivedDomainInfo16 = PqDerivedDomainInfo<
+    EMBEDDING_LENGTH,
+    CENTROID_16_LENGTH,
+    QUANTIZED_16_EMBEDDING_LENGTH,
+    EuclideanDistance16,
+>;
+pub type PqDerivedDomainInfo32 = PqDerivedDomainInfo<
+    EMBEDDING_LENGTH,
+    CENTROID_32_LENGTH,
+    QUANTIZED_32_EMBEDDING_LENGTH,
+    EuclideanDistance32,
+>;
 pub type PqDerivedDomain16 = PqDerivedDomain<
     EMBEDDING_LENGTH,
     CENTROID_16_LENGTH,
     QUANTIZED_16_EMBEDDING_LENGTH,
-    Centroid16Comparator,
+    EuclideanDistance16,
 >;
 pub type PqDerivedDomain32 = PqDerivedDomain<
     EMBEDDING_LENGTH,
     CENTROID_32_LENGTH,
     QUANTIZED_32_EMBEDDING_LENGTH,
-    Centroid32Comparator,
+    EuclideanDistance32,
+>;
+pub type PqDerivedDomainInitializer16 = PqDerivedDomainInitializer<
+    EMBEDDING_LENGTH,
+    CENTROID_16_LENGTH,
+    QUANTIZED_16_EMBEDDING_LENGTH,
+    EuclideanDistance16,
+>;
+pub type PqDerivedDomainInitializer32 = PqDerivedDomainInitializer<
+    EMBEDDING_LENGTH,
+    CENTROID_32_LENGTH,
+    QUANTIZED_32_EMBEDDING_LENGTH,
+    EuclideanDistance32,
 >;
 
 #[derive(Serialize, Deserialize, ValueEnum, Debug, Clone, Copy)]
@@ -179,19 +237,25 @@ impl DerivedDomainConfiguration {
         match self {
             Self::SmallPq => {
                 let file = RwLock::new(VectorFile::open(&vecs_path, true)?);
-                let quantizer: HnswQuantizer16 = HnswQuantizer::deserialize(&quantizer_path, ())
-                    .expect("hnsw deserialization failed (small)");
 
-                let domain: PqDerivedDomain16 = PqDerivedDomain { file, quantizer };
+                let quantizer: HnswQuantizer16 = HnswQuantizer::deserialize(&quantizer_path, &())
+                    .expect("hnsw deserialization failed (small)");
+                let domain: PqDerivedDomain16 = PqDerivedDomain {
+                    file,
+                    quantizer: quantizer,
+                };
 
                 Ok(domain.as_arc::<T>().unwrap())
             }
             Self::LargePq => {
                 let file = RwLock::new(VectorFile::open(&vecs_path, true)?);
-                let quantizer: HnswQuantizer32 = HnswQuantizer::deserialize(&quantizer_path, ())
+                let quantizer: HnswQuantizer32 = HnswQuantizer::deserialize(&quantizer_path, &())
                     .expect("hnsw deserialization failed (large)");
 
-                let domain: PqDerivedDomain32 = PqDerivedDomain { file, quantizer };
+                let domain: PqDerivedDomain32 = PqDerivedDomain {
+                    file,
+                    quantizer: quantizer,
+                };
 
                 Ok(domain.as_arc::<T>().unwrap())
             }
@@ -208,7 +272,7 @@ impl DerivedDomainConfiguration {
                     EMBEDDING_LENGTH,
                     CENTROID_16_LENGTH,
                     QUANTIZED_16_EMBEDDING_LENGTH,
-                    Centroid16Comparator,
+                    EuclideanDistance16,
                 >::default();
 
                 let boxed: Box<dyn DerivedDomainInitializer<Embedding> + 'static + Send + Sync> =
@@ -221,7 +285,7 @@ impl DerivedDomainConfiguration {
                     EMBEDDING_LENGTH,
                     CENTROID_32_LENGTH,
                     QUANTIZED_32_EMBEDDING_LENGTH,
-                    Centroid32Comparator,
+                    EuclideanDistance32,
                 >::default();
 
                 let boxed: Box<dyn DerivedDomainInitializer<Embedding> + 'static + Send + Sync> =
@@ -245,11 +309,7 @@ impl<
         const SIZE: usize,
         const CENTROID_SIZE: usize,
         const QUANTIZED_SIZE: usize,
-        C: 'static
-            + Comparator<T = [f32; CENTROID_SIZE]>
-            + CentroidComparatorConstructor
-            + Serializable<Params = ()>
-            + Send,
+        C: 'static + DistanceCalculator<T = [f32; CENTROID_SIZE]>,
     > PqDerivedDomainInitializer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
 {
 }
@@ -266,13 +326,11 @@ impl<
         const SIZE: usize,
         const CENTROID_SIZE: usize,
         const QUANTIZED_SIZE: usize,
-        C: 'static
-            + Comparator<T = [f32; CENTROID_SIZE]>
-            + CentroidComparatorConstructor
-            + Serializable<Params = ()>
-            + Send,
+        C: 'static + DistanceCalculator<T = [f32; CENTROID_SIZE]> + Default + Send,
     > DerivedDomainInitializer<[f32; SIZE]>
     for PqDerivedDomainInitializer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C>
+where
+    ArrayCentroidComparator<CENTROID_SIZE, C>: 'static + Comparator<T = [f32; CENTROID_SIZE]>,
 {
     fn initialize(
         &self,
@@ -331,11 +389,11 @@ impl<
         eprintln!("Number of centroids: {}", centroids.len());
 
         let vector_ids = (0..centroids.len()).map(VectorId).collect();
-        let centroid_comparator = C::new(centroids);
+        let centroid_comparator = ArrayCentroidComparator::new(centroids);
         let centroid_m = 24;
         let centroid_m0 = 48;
         let centroid_order = 12;
-        let mut centroid_hnsw: Hnsw<C> = Hnsw::generate(
+        let mut centroid_hnsw: Hnsw<ArrayCentroidComparator<CENTROID_SIZE, C>> = Hnsw::generate(
             centroid_comparator,
             vector_ids,
             centroid_m,
@@ -345,8 +403,12 @@ impl<
         //centroid_hnsw.improve_index();
         centroid_hnsw.improve_neighbors(0.01, 1.0);
 
-        let centroid_quantizer: HnswQuantizer<SIZE, CENTROID_SIZE, QUANTIZED_SIZE, C> =
-            HnswQuantizer::new(centroid_hnsw);
+        let centroid_quantizer: HnswQuantizer<
+            SIZE,
+            CENTROID_SIZE,
+            QUANTIZED_SIZE,
+            ArrayCentroidComparator<CENTROID_SIZE, C>,
+        > = HnswQuantizer::new(centroid_hnsw);
 
         let quantizer_path = path.join("quantizer");
         centroid_quantizer.serialize(quantizer_path)?;
@@ -357,7 +419,7 @@ impl<
 
         let deriver = PqDerivedDomain {
             file: RwLock::new(quantized_file),
-            quantizer: centroid_quantizer,
+            quantizer: Arc::new(centroid_quantizer),
         };
         Ok(Arc::new(deriver))
     }
@@ -502,13 +564,14 @@ impl<T: Copy + 'static> Domain<T> {
         Ok(())
     }
 
-    pub fn get_derived<'a, T2: Deriver + Send + Sync>(
-        &'a self,
-        name: &str,
-    ) -> Option<impl Deref<Target = T2> + 'a> {
-        let derived_domains = self.derived_domains.read().unwrap();
-        let derived = derived_domains.get(name)?;
+    pub fn get_derived_domain_info<I: DerivedDomainInfo>(&self, name: &str) -> Option<I> {
+        let domains = self.derived_domains.read().unwrap();
+        let deriver = domains.get(name)?;
+        let info = deriver.get_derived_domain_info() as Box<dyn Any>;
+        let downcast_info: Box<I> = info
+            .downcast()
+            .expect("derived domain info not of expected type");
 
-        Some(Arc::downcast::<T2>(derived.clone()).expect("derived domain was not of expected type"))
+        Some(*downcast_info)
     }
 }

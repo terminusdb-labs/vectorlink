@@ -1,19 +1,23 @@
 use std::{fs::OpenOptions, path::PathBuf, sync::Arc};
 
 use itertools::Either;
-use parallel_hnsw::{pq::QuantizedHnsw, AbstractVector, Hnsw, Serializable, VectorId};
+use parallel_hnsw::{
+    pq::{HnswQuantizer, QuantizedHnsw},
+    AbstractVector, Hnsw, Serializable, VectorId,
+};
 use rayon::iter::IndexedParallelIterator;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     comparator::{
-        Centroid16Comparator, Centroid32Comparator, DiskOpenAIComparator, OpenAIComparator,
-        Quantized16Comparator, Quantized32Comparator,
+        Centroid16Comparator, Centroid32Comparator, DiskOpenAIComparator, DomainQuantizer,
+        OpenAIComparator, Quantized16Comparator, Quantized32Comparator,
     },
     openai::Model,
     vecmath::{
-        Embedding, CENTROID_16_LENGTH, CENTROID_32_LENGTH, EMBEDDING_LENGTH,
-        QUANTIZED_16_EMBEDDING_LENGTH, QUANTIZED_32_EMBEDDING_LENGTH,
+        Embedding, EuclideanDistance16, EuclideanDistance32, CENTROID_16_LENGTH,
+        CENTROID_32_LENGTH, EMBEDDING_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH,
+        QUANTIZED_32_EMBEDDING_LENGTH,
     },
     vectors::VectorStore,
 };
@@ -42,9 +46,14 @@ pub enum HnswConfiguration {
             EMBEDDING_LENGTH,
             CENTROID_32_LENGTH,
             QUANTIZED_32_EMBEDDING_LENGTH,
-            Centroid32Comparator,
             Quantized32Comparator,
             DiskOpenAIComparator,
+            DomainQuantizer<
+                EMBEDDING_LENGTH,
+                CENTROID_32_LENGTH,
+                QUANTIZED_32_EMBEDDING_LENGTH,
+                EuclideanDistance32,
+            >,
         >,
     ),
     SmallQuantizedOpenAi(
@@ -53,9 +62,14 @@ pub enum HnswConfiguration {
             EMBEDDING_LENGTH,
             CENTROID_16_LENGTH,
             QUANTIZED_16_EMBEDDING_LENGTH,
-            Centroid16Comparator,
             Quantized16Comparator,
             DiskOpenAIComparator,
+            DomainQuantizer<
+                EMBEDDING_LENGTH,
+                CENTROID_16_LENGTH,
+                QUANTIZED_16_EMBEDDING_LENGTH,
+                EuclideanDistance16,
+            >,
         >,
     ),
     UnquantizedOpenAi(Model, OpenAIHnsw),
@@ -173,11 +187,11 @@ impl Serializable for HnswConfiguration {
         path: P,
     ) -> Result<(), parallel_hnsw::SerializationError> {
         match self {
-            HnswConfiguration::QuantizedOpenAi(_, hnsw) => {
-                hnsw.serialize(&path)?;
-            }
-            HnswConfiguration::UnquantizedOpenAi(_, qhnsw) => {
+            HnswConfiguration::QuantizedOpenAi(_, qhnsw) => {
                 qhnsw.serialize(&path)?;
+            }
+            HnswConfiguration::UnquantizedOpenAi(_, hnsw) => {
+                hnsw.serialize(&path)?;
             }
             HnswConfiguration::SmallQuantizedOpenAi(_, qhnsw) => {
                 qhnsw.serialize(&path)?;
@@ -196,7 +210,7 @@ impl Serializable for HnswConfiguration {
 
     fn deserialize<P: AsRef<std::path::Path>>(
         path: P,
-        params: Self::Params,
+        params: &Self::Params,
     ) -> Result<Self, parallel_hnsw::SerializationError> {
         let state_path: PathBuf = path.as_ref().join("state.json");
         let mut state_file = OpenOptions::new()
@@ -209,14 +223,14 @@ impl Serializable for HnswConfiguration {
         Ok(match state.typ {
             HnswConfigurationType::QuantizedOpenAi => HnswConfiguration::QuantizedOpenAi(
                 state.model,
-                QuantizedHnsw::deserialize(path, params)?,
+                QuantizedHnsw::deserialize(path, &(params.clone(), params.clone()))?,
             ),
             HnswConfigurationType::UnquantizedOpenAi => {
                 HnswConfiguration::UnquantizedOpenAi(state.model, Hnsw::deserialize(path, params)?)
             }
             HnswConfigurationType::SmallQuantizedOpenAi => HnswConfiguration::SmallQuantizedOpenAi(
                 state.model,
-                QuantizedHnsw::deserialize(path, params)?,
+                QuantizedHnsw::deserialize(path, &(params.clone(), params.clone()))?,
             ),
         })
     }

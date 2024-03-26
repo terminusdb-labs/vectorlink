@@ -128,7 +128,7 @@ pub fn cosine_partial_distance_32(v1: &Centroid32, v2: &Centroid32) -> f32 {
     simd::cosine_partial_distance_32_simd(v1, v2)
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct EuclideanDistance32;
 impl DistanceCalculator for EuclideanDistance32 {
     type T = Centroid32;
@@ -148,7 +148,7 @@ impl DistanceCalculator for EuclideanDistance32 {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct EuclideanDistance16;
 impl DistanceCalculator for EuclideanDistance16 {
     type T = Centroid16;
