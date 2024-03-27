@@ -320,8 +320,8 @@ pub mod simd {
 
     pub fn euclidean_partial_distance_4_simd(left: &Centroid4, right: &Centroid4) -> f32 {
         let mut sum = <f32x4>::splat(0.);
-        let l = <f32x4>::from_slice(&left[0..16]);
-        let r = <f32x4>::from_slice(&right[0..16]);
+        let l = <f32x4>::from_slice(&left[0..4]);
+        let r = <f32x4>::from_slice(&right[0..4]);
         let res = (l - r);
         sum += res * res;
         sum.reduce_sum()
@@ -329,8 +329,8 @@ pub mod simd {
 
     pub fn euclidean_partial_distance_8_simd(left: &Centroid8, right: &Centroid8) -> f32 {
         let mut sum = <f32x8>::splat(0.);
-        let l = <f32x8>::from_slice(&left[0..16]);
-        let r = <f32x8>::from_slice(&right[0..16]);
+        let l = <f32x8>::from_slice(&left[0..8]);
+        let r = <f32x8>::from_slice(&right[0..8]);
         let res = (l - r);
         sum += res * res;
         sum.reduce_sum()
