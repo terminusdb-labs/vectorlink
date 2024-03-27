@@ -244,15 +244,9 @@ impl Serializable for HnswConfiguration {
         path: P,
     ) -> Result<(), parallel_hnsw::SerializationError> {
         match self {
-            HnswConfiguration::QuantizedOpenAi(_, hnsw) => {
-                hnsw.serialize(&path)?;
-            }
-            HnswConfiguration::UnquantizedOpenAi(_, qhnsw) => {
-                qhnsw.serialize(&path)?;
-            }
-            HnswConfiguration::SmallQuantizedOpenAi(_, qhnsw) => {
-                qhnsw.serialize(&path)?;
-            }
+            HnswConfiguration::UnquantizedOpenAi(_, hhnsw) => hhnsw.serialize(&path)?,
+            HnswConfiguration::QuantizedOpenAi(_, qnsw) => qnsw.serialize(&path)?,
+            HnswConfiguration::SmallQuantizedOpenAi(_, qhnsw) => qhnsw.serialize(&path)?,
             HnswConfiguration::SmallQuantizedOpenAi8(_, qhnsw) => qhnsw.serialize(&path)?,
             HnswConfiguration::SmallQuantizedOpenAi4(_, qhnsw) => qhnsw.serialize(&path)?,
         }

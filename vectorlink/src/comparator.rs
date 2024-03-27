@@ -442,7 +442,7 @@ impl Serializable for Quantized32Comparator {
         self.cc.serialize(index_path)?;
 
         let vector_path = path_buf.join("vectors");
-        let mut vector_file = VectorFile::open(vector_path, true)?;
+        let mut vector_file = VectorFile::create(vector_path, true)?;
         vector_file.append_vector_range(self.data.vecs())?;
         Ok(())
     }
