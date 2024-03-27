@@ -26,6 +26,26 @@ pub const CENTROID_16_BYTE_LENGTH: usize = CENTROID_16_LENGTH * 4;
 pub type Centroid16 = [f32; CENTROID_16_LENGTH];
 pub type Centroid16Bytes = [u8; CENTROID_16_BYTE_LENGTH];
 
+pub const QUANTIZED_8_EMBEDDING_LENGTH: usize = 192;
+pub const QUANTIZED_8_EMBEDDING_BYTE_LENGTH: usize = QUANTIZED_8_EMBEDDING_LENGTH * 2;
+pub type Quantized8Embedding = [u16; QUANTIZED_8_EMBEDDING_LENGTH];
+pub type Quantized8EmbeddingBytes = [u8; QUANTIZED_8_EMBEDDING_BYTE_LENGTH];
+
+pub const CENTROID_8_LENGTH: usize = 8;
+pub const CENTROID_8_BYTE_LENGTH: usize = CENTROID_8_LENGTH * 4;
+pub type Centroid8 = [f32; CENTROID_8_LENGTH];
+pub type Centroid8Bytes = [u8; CENTROID_8_BYTE_LENGTH];
+
+pub const QUANTIZED_4_EMBEDDING_LENGTH: usize = 384;
+pub const QUANTIZED_4_EMBEDDING_BYTE_LENGTH: usize = QUANTIZED_4_EMBEDDING_LENGTH * 2;
+pub type Quantized4Embedding = [u16; QUANTIZED_4_EMBEDDING_LENGTH];
+pub type Quantized4EmbeddingBytes = [u8; QUANTIZED_4_EMBEDDING_BYTE_LENGTH];
+
+pub const CENTROID_4_LENGTH: usize = 4;
+pub const CENTROID_4_BYTE_LENGTH: usize = CENTROID_4_LENGTH * 4;
+pub type Centroid4 = [f32; CENTROID_4_LENGTH];
+pub type Centroid4Bytes = [u8; CENTROID_4_BYTE_LENGTH];
+
 pub fn empty_embedding() -> Embedding {
     [0.0; EMBEDDING_LENGTH]
 }
@@ -120,6 +140,14 @@ pub fn euclidean_distance_16(v1: &Centroid16, v2: &Centroid16) -> f32 {
     simd::euclidean_distance_16_simd(v1, v2)
 }
 
+pub fn euclidean_partial_distance_4(v1: &Centroid4, v2: &Centroid4) -> f32 {
+    simd::euclidean_partial_distance_4_simd(v1, v2)
+}
+
+pub fn euclidean_partial_distance_8(v1: &Centroid8, v2: &Centroid8) -> f32 {
+    simd::euclidean_partial_distance_8_simd(v1, v2)
+}
+
 pub fn euclidean_partial_distance_16(v1: &Centroid16, v2: &Centroid16) -> f32 {
     simd::euclidean_partial_distance_16_simd(v1, v2)
 }
@@ -168,6 +196,46 @@ impl DistanceCalculator for EuclideanDistance16 {
     }
 }
 
+#[derive(Default)]
+pub struct EuclideanDistance8;
+impl DistanceCalculator for EuclideanDistance8 {
+    type T = Centroid8;
+
+    fn partial_distance(&self, left: &Self::T, right: &Self::T) -> f32 {
+        euclidean_partial_distance_8(left, right)
+    }
+
+    fn finalize_partial_distance(&self, distance: f32) -> f32 {
+        distance.sqrt()
+    }
+
+    fn aggregate_partial_distances(&self, distances: &[f32]) -> f32 {
+        assert!(distances.len() == QUANTIZED_8_EMBEDDING_LENGTH);
+        let cast = unsafe { &*(distances.as_ptr() as *const [f32; QUANTIZED_8_EMBEDDING_LENGTH]) };
+        simd::sum_192(cast).sqrt()
+    }
+}
+
+#[derive(Default)]
+pub struct EuclideanDistance4;
+impl DistanceCalculator for EuclideanDistance4 {
+    type T = Centroid4;
+
+    fn partial_distance(&self, left: &Self::T, right: &Self::T) -> f32 {
+        euclidean_partial_distance_4(left, right)
+    }
+
+    fn finalize_partial_distance(&self, distance: f32) -> f32 {
+        distance.sqrt()
+    }
+
+    fn aggregate_partial_distances(&self, distances: &[f32]) -> f32 {
+        assert!(distances.len() == QUANTIZED_4_EMBEDDING_LENGTH);
+        let cast = unsafe { &*(distances.as_ptr() as *const [f32; QUANTIZED_4_EMBEDDING_LENGTH]) };
+        simd::sum_384(cast).sqrt()
+    }
+}
+
 pub fn normalize_vec(vec: &mut Embedding) {
     simd::normalize_vec_simd(vec)
 }
@@ -183,7 +251,7 @@ pub fn sum_96(vec: &[f32; 96]) -> f32 {
 pub mod simd {
     use super::*;
     use aligned_box::AlignedBox;
-    use std::simd::{f32x16, num::SimdFloat, Simd};
+    use std::simd::{f32x16, f32x4, f32x8, num::SimdFloat, Simd};
 
     pub fn aligned_box(e: Embedding) -> AlignedBox<Embedding> {
         AlignedBox::new(std::mem::align_of::<f32x16>(), e).unwrap()
@@ -242,6 +310,24 @@ pub mod simd {
         euclidean_partial_distance_16_simd(left, right).sqrt()
     }
 
+    pub fn euclidean_partial_distance_4_simd(left: &Centroid4, right: &Centroid4) -> f32 {
+        let mut sum = <f32x4>::splat(0.);
+        let l = <f32x4>::from_slice(&left[0..16]);
+        let r = <f32x4>::from_slice(&right[0..16]);
+        let res = (l - r);
+        sum += res * res;
+        sum.reduce_sum()
+    }
+
+    pub fn euclidean_partial_distance_8_simd(left: &Centroid8, right: &Centroid8) -> f32 {
+        let mut sum = <f32x8>::splat(0.);
+        let l = <f32x8>::from_slice(&left[0..16]);
+        let r = <f32x8>::from_slice(&right[0..16]);
+        let res = (l - r);
+        sum += res * res;
+        sum.reduce_sum()
+    }
+
     pub fn euclidean_partial_distance_16_simd(left: &Centroid16, right: &Centroid16) -> f32 {
         let mut sum = <f32x16>::splat(0.);
         let l = <f32x16>::from_slice(&left[0..16]);
@@ -287,6 +373,22 @@ pub mod simd {
         sum += <f32x16>::from_slice(&array[48..80]);
         sum += <f32x16>::from_slice(&array[80..96]);
 
+        sum.reduce_sum()
+    }
+
+    pub fn sum_192(array: &[f32; 192]) -> f32 {
+        let mut sum = <f32x16>::from_slice(&array[..16]);
+        for i in 1..12 {
+            sum += <f32x16>::from_slice(&array[16 * i..16 * (i + 1)]);
+        }
+        sum.reduce_sum()
+    }
+
+    pub fn sum_384(array: &[f32; 384]) -> f32 {
+        let mut sum = <f32x16>::from_slice(&array[..16]);
+        for i in 1..24 {
+            sum += <f32x16>::from_slice(&array[16 * i..16 * (i + 1)]);
+        }
         sum.reduce_sum()
     }
 }
