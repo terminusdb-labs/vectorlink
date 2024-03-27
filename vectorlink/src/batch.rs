@@ -269,13 +269,13 @@ pub async fn index_using_operations_and_vectors<
         );
         let hnsw: QuantizedHnsw<
             EMBEDDING_LENGTH,
-            CENTROID_4_LENGTH,
-            QUANTIZED_4_EMBEDDING_LENGTH,
-            Centroid4Comparator,
-            Quantized4Comparator,
+            CENTROID_16_LENGTH,
+            QUANTIZED_16_EMBEDDING_LENGTH,
+            Centroid16Comparator,
+            Quantized16Comparator,
             DiskOpenAIComparator,
         > = QuantizedHnsw::new(number_of_centroids, c);
-        HnswConfiguration::SmallQuantizedOpenAi4(model, hnsw)
+        HnswConfiguration::SmallQuantizedOpenAi(model, hnsw)
     } else {
         let hnsw = Hnsw::generate(comparator, vecs, 24, 48, 12);
         HnswConfiguration::UnquantizedOpenAi(model, hnsw)
