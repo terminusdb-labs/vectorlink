@@ -7,13 +7,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     comparator::{
-        Centroid16Comparator, Centroid32Comparator, DiskOpenAIComparator, OpenAIComparator,
-        Quantized16Comparator, Quantized32Comparator,
+        Centroid16Comparator, Centroid32Comparator, Centroid4Comparator, Centroid8Comparator,
+        DiskOpenAIComparator, OpenAIComparator, Quantized16Comparator, Quantized32Comparator,
+        Quantized4Comparator, Quantized8Comparator,
     },
     openai::Model,
     vecmath::{
-        Embedding, CENTROID_16_LENGTH, CENTROID_32_LENGTH, EMBEDDING_LENGTH,
-        QUANTIZED_16_EMBEDDING_LENGTH, QUANTIZED_32_EMBEDDING_LENGTH,
+        Embedding, CENTROID_16_LENGTH, CENTROID_32_LENGTH, CENTROID_4_LENGTH, CENTROID_8_LENGTH,
+        EMBEDDING_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH, QUANTIZED_32_EMBEDDING_LENGTH,
+        QUANTIZED_4_EMBEDDING_LENGTH, QUANTIZED_8_EMBEDDING_LENGTH,
     },
     vectors::VectorStore,
 };
@@ -64,10 +66,10 @@ pub enum HnswConfiguration {
         Model,
         QuantizedHnsw<
             EMBEDDING_LENGTH,
-            CENTROID_16_LENGTH,
-            QUANTIZED_16_EMBEDDING_LENGTH,
-            Centroid16Comparator,
-            Quantized16Comparator,
+            CENTROID_8_LENGTH,
+            QUANTIZED_8_EMBEDDING_LENGTH,
+            Centroid8Comparator,
+            Quantized8Comparator,
             DiskOpenAIComparator,
         >,
     ),
@@ -75,10 +77,10 @@ pub enum HnswConfiguration {
         Model,
         QuantizedHnsw<
             EMBEDDING_LENGTH,
-            CENTROID_16_LENGTH,
-            QUANTIZED_16_EMBEDDING_LENGTH,
-            Centroid16Comparator,
-            Quantized16Comparator,
+            CENTROID_4_LENGTH,
+            QUANTIZED_4_EMBEDDING_LENGTH,
+            Centroid4Comparator,
+            Quantized4Comparator,
             DiskOpenAIComparator,
         >,
     ),

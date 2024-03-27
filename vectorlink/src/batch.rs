@@ -20,13 +20,17 @@ use urlencoding::encode;
 
 use crate::{
     comparator::{
-        Centroid16Comparator, DiskOpenAIComparator, OpenAIComparator, Quantized16Comparator,
+        Centroid16Comparator, Centroid8Comparator, DiskOpenAIComparator, OpenAIComparator,
+        Quantized16Comparator, Quantized8Comparator,
     },
     configuration::HnswConfiguration,
     indexer::{create_index_name, index_serialization_path},
     openai::{embeddings_for, EmbeddingError, Model},
     server::Operation,
-    vecmath::{Embedding, CENTROID_16_LENGTH, EMBEDDING_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH},
+    vecmath::{
+        Embedding, CENTROID_16_LENGTH, CENTROID_8_LENGTH, EMBEDDING_LENGTH,
+        QUANTIZED_16_EMBEDDING_LENGTH, QUANTIZED_8_EMBEDDING_LENGTH,
+    },
     vectors::VectorStore,
 };
 
@@ -265,13 +269,13 @@ pub async fn index_using_operations_and_vectors<
         );
         let hnsw: QuantizedHnsw<
             EMBEDDING_LENGTH,
-            CENTROID_16_LENGTH,
-            QUANTIZED_16_EMBEDDING_LENGTH,
-            Centroid16Comparator,
-            Quantized16Comparator,
+            CENTROID_8_LENGTH,
+            QUANTIZED_8_EMBEDDING_LENGTH,
+            Centroid8Comparator,
+            Quantized8Comparator,
             DiskOpenAIComparator,
         > = QuantizedHnsw::new(number_of_vectors, c);
-        HnswConfiguration::SmallQuantizedOpenAi(model, hnsw)
+        HnswConfiguration::SmallQuantizedOpenAi8(model, hnsw)
     } else {
         let hnsw = Hnsw::generate(comparator, vecs, 24, 48, 12);
         HnswConfiguration::UnquantizedOpenAi(model, hnsw)

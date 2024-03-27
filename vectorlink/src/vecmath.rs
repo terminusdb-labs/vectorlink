@@ -248,6 +248,14 @@ pub fn sum_96(vec: &[f32; 96]) -> f32 {
     simd::sum_96(vec)
 }
 
+pub fn sum_192(vec: &[f32; 192]) -> f32 {
+    simd::sum_192(vec)
+}
+
+pub fn sum_384(vec: &[f32; 384]) -> f32 {
+    simd::sum_384(vec)
+}
+
 pub mod simd {
     use super::*;
     use aligned_box::AlignedBox;

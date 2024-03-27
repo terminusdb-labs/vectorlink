@@ -15,9 +15,11 @@ use parallel_hnsw::{pq, Comparator, Serializable, SerializationError, VectorId};
 
 use crate::store::{ImmutableVectorFile, LoadedVectorRange, VectorFile};
 use crate::vecmath::{
-    self, EuclideanDistance16, EuclideanDistance32, Quantized16Embedding, Quantized32Embedding,
-    CENTROID_16_LENGTH, CENTROID_32_LENGTH, QUANTIZED_16_EMBEDDING_LENGTH,
-    QUANTIZED_32_EMBEDDING_LENGTH,
+    self, EuclideanDistance16, EuclideanDistance32, EuclideanDistance4, EuclideanDistance8,
+    Quantized16Embedding, Quantized32Embedding, Quantized4Embedding, Quantized8Embedding,
+    CENTROID_16_LENGTH, CENTROID_32_LENGTH, CENTROID_4_LENGTH, CENTROID_8_LENGTH,
+    QUANTIZED_16_EMBEDDING_LENGTH, QUANTIZED_32_EMBEDDING_LENGTH, QUANTIZED_4_EMBEDDING_LENGTH,
+    QUANTIZED_8_EMBEDDING_LENGTH,
 };
 use crate::{
     vecmath::{normalized_cosine_distance, Embedding},
@@ -241,6 +243,8 @@ impl<const N: usize, C> Clone for ArrayCentroidComparator<N, C> {
 }
 unsafe impl<const N: usize, C> Sync for ArrayCentroidComparator<N, C> {}
 
+pub type Centroid4Comparator = ArrayCentroidComparator<CENTROID_4_LENGTH, EuclideanDistance4>;
+pub type Centroid8Comparator = ArrayCentroidComparator<CENTROID_8_LENGTH, EuclideanDistance8>;
 pub type Centroid16Comparator = ArrayCentroidComparator<CENTROID_16_LENGTH, EuclideanDistance16>;
 pub type Centroid32Comparator = ArrayCentroidComparator<CENTROID_32_LENGTH, EuclideanDistance32>;
 
@@ -344,6 +348,40 @@ impl QuantizedComparatorConstructor for Quantized16Comparator {
     }
 }
 
+#[derive(Clone)]
+pub struct Quantized8Comparator {
+    pub cc: Centroid8Comparator,
+    pub data: Arc<LoadedVectorRange<Quantized8Embedding>>,
+}
+
+impl QuantizedComparatorConstructor for Quantized8Comparator {
+    type CentroidComparator = Centroid8Comparator;
+
+    fn new(cc: &Self::CentroidComparator) -> Self {
+        Self {
+            cc: cc.clone(),
+            data: Default::default(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Quantized4Comparator {
+    pub cc: Centroid4Comparator,
+    pub data: Arc<LoadedVectorRange<Quantized4Embedding>>,
+}
+
+impl QuantizedComparatorConstructor for Quantized4Comparator {
+    type CentroidComparator = Centroid4Comparator;
+
+    fn new(cc: &Self::CentroidComparator) -> Self {
+        Self {
+            cc: cc.clone(),
+            data: Default::default(),
+        }
+    }
+}
+
 impl PartialDistance for Quantized32Comparator {
     fn partial_distance(&self, i: u16, j: u16) -> f32 {
         self.cc.partial_distance(i, j)
@@ -351,6 +389,18 @@ impl PartialDistance for Quantized32Comparator {
 }
 
 impl PartialDistance for Quantized16Comparator {
+    fn partial_distance(&self, i: u16, j: u16) -> f32 {
+        self.cc.partial_distance(i, j)
+    }
+}
+
+impl PartialDistance for Quantized8Comparator {
+    fn partial_distance(&self, i: u16, j: u16) -> f32 {
+        self.cc.partial_distance(i, j)
+    }
+}
+
+impl PartialDistance for Quantized4Comparator {
     fn partial_distance(&self, i: u16, j: u16) -> f32 {
         self.cc.partial_distance(i, j)
     }
@@ -520,6 +570,168 @@ impl Serializable for Quantized16Comparator {
 
 impl pq::VectorStore for Quantized16Comparator {
     type T = <Quantized16Comparator as Comparator>::T;
+
+    fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
+        // this is p retty stupid, but then, these comparators should not be storing in the first place
+        let mut new_contents: Vec<Self::T> = Vec::with_capacity(self.data.len() + i.size_hint().0);
+        new_contents.extend(self.data.vecs().iter());
+        let vid = self.data.len();
+        let mut vectors: Vec<VectorId> = Vec::new();
+        new_contents.extend(i.enumerate().map(|(i, v)| {
+            vectors.push(VectorId(vid + i));
+            v
+        }));
+
+        let end = new_contents.len();
+
+        let data = LoadedVectorRange::new(new_contents, 0..end);
+        self.data = Arc::new(data);
+
+        vectors
+    }
+}
+
+impl Comparator for Quantized8Comparator
+where
+    Quantized8Comparator: PartialDistance,
+{
+    type T = Quantized8Embedding;
+
+    type Borrowable<'a> = &'a Self::T;
+
+    fn lookup(&self, v: VectorId) -> Self::Borrowable<'_> {
+        self.data.vec(v.0)
+    }
+
+    fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
+        let mut partial_distances = [0.0_f32; QUANTIZED_8_EMBEDDING_LENGTH];
+        for ix in 0..QUANTIZED_8_EMBEDDING_LENGTH {
+            let partial_1 = v1[ix];
+            let partial_2 = v2[ix];
+            let partial_distance = self.cc.partial_distance(partial_1, partial_2);
+            partial_distances[ix] = partial_distance;
+        }
+
+        vecmath::sum_192(&partial_distances).sqrt()
+    }
+}
+
+impl Serializable for Quantized8Comparator {
+    type Params = ();
+
+    fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
+        let path_buf: PathBuf = path.as_ref().into();
+        std::fs::create_dir_all(&path_buf)?;
+
+        let index_path = path_buf.join("index");
+        self.cc.serialize(index_path)?;
+
+        let vector_path = path_buf.join("vectors");
+        let mut vector_file = VectorFile::create(vector_path, true)?;
+        vector_file.append_vector_range(self.data.vecs())?;
+        Ok(())
+    }
+
+    fn deserialize<P: AsRef<Path>>(
+        path: P,
+        _params: Self::Params,
+    ) -> Result<Self, SerializationError> {
+        let path_buf: PathBuf = path.as_ref().into();
+        let index_path = path_buf.join("index");
+        let cc = Centroid8Comparator::deserialize(index_path, ())?;
+
+        let vector_path = path_buf.join("vectors");
+        let vector_file = VectorFile::open(vector_path, true)?;
+        let range = vector_file.all_vectors()?;
+
+        let data = Arc::new(range);
+        Ok(Self { cc, data })
+    }
+}
+
+impl pq::VectorStore for Quantized8Comparator {
+    type T = <Quantized8Comparator as Comparator>::T;
+
+    fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
+        // this is p retty stupid, but then, these comparators should not be storing in the first place
+        let mut new_contents: Vec<Self::T> = Vec::with_capacity(self.data.len() + i.size_hint().0);
+        new_contents.extend(self.data.vecs().iter());
+        let vid = self.data.len();
+        let mut vectors: Vec<VectorId> = Vec::new();
+        new_contents.extend(i.enumerate().map(|(i, v)| {
+            vectors.push(VectorId(vid + i));
+            v
+        }));
+
+        let end = new_contents.len();
+
+        let data = LoadedVectorRange::new(new_contents, 0..end);
+        self.data = Arc::new(data);
+
+        vectors
+    }
+}
+
+impl Comparator for Quantized4Comparator
+where
+    Quantized4Comparator: PartialDistance,
+{
+    type T = Quantized4Embedding;
+
+    type Borrowable<'a> = &'a Self::T;
+
+    fn lookup(&self, v: VectorId) -> Self::Borrowable<'_> {
+        self.data.vec(v.0)
+    }
+
+    fn compare_raw(&self, v1: &Self::T, v2: &Self::T) -> f32 {
+        let mut partial_distances = [0.0_f32; QUANTIZED_4_EMBEDDING_LENGTH];
+        for ix in 0..QUANTIZED_4_EMBEDDING_LENGTH {
+            let partial_1 = v1[ix];
+            let partial_2 = v2[ix];
+            let partial_distance = self.cc.partial_distance(partial_1, partial_2);
+            partial_distances[ix] = partial_distance;
+        }
+
+        vecmath::sum_384(&partial_distances).sqrt()
+    }
+}
+
+impl Serializable for Quantized4Comparator {
+    type Params = ();
+
+    fn serialize<P: AsRef<Path>>(&self, path: P) -> Result<(), SerializationError> {
+        let path_buf: PathBuf = path.as_ref().into();
+        std::fs::create_dir_all(&path_buf)?;
+
+        let index_path = path_buf.join("index");
+        self.cc.serialize(index_path)?;
+
+        let vector_path = path_buf.join("vectors");
+        let mut vector_file = VectorFile::create(vector_path, true)?;
+        vector_file.append_vector_range(self.data.vecs())?;
+        Ok(())
+    }
+
+    fn deserialize<P: AsRef<Path>>(
+        path: P,
+        _params: Self::Params,
+    ) -> Result<Self, SerializationError> {
+        let path_buf: PathBuf = path.as_ref().into();
+        let index_path = path_buf.join("index");
+        let cc = Centroid4Comparator::deserialize(index_path, ())?;
+
+        let vector_path = path_buf.join("vectors");
+        let vector_file = VectorFile::open(vector_path, true)?;
+        let range = vector_file.all_vectors()?;
+
+        let data = Arc::new(range);
+        Ok(Self { cc, data })
+    }
+}
+
+impl pq::VectorStore for Quantized4Comparator {
+    type T = <Quantized4Comparator as Comparator>::T;
 
     fn store(&mut self, i: Box<dyn Iterator<Item = Self::T>>) -> Vec<VectorId> {
         // this is p retty stupid, but then, these comparators should not be storing in the first place
