@@ -262,7 +262,8 @@ pub async fn index_using_operations_and_vectors<
 
     eprintln!("ready to generate hnsw");
     let hnsw = if quantize_hnsw {
-        let number_of_vectors = NUMBER_OF_CENTROIDS / 10;
+        let number_of_centroids = 5_000;
+        let number_of_vectors = 8 * number_of_centroids / (EMBEDDING_LENGTH / CENTROID_8_LENGTH);
         let c = DiskOpenAIComparator::new(
             domain_obj.name().to_owned(),
             Arc::new(domain_obj.immutable_file()),
@@ -274,7 +275,7 @@ pub async fn index_using_operations_and_vectors<
             Centroid8Comparator,
             Quantized8Comparator,
             DiskOpenAIComparator,
-        > = QuantizedHnsw::new(number_of_vectors, c);
+        > = QuantizedHnsw::new(number_of_vectors, number_of_centroids, c);
         HnswConfiguration::SmallQuantizedOpenAi8(model, hnsw)
     } else {
         let hnsw = Hnsw::generate(comparator, vecs, 24, 48, 12);
