@@ -579,7 +579,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             remap.shuffle(&mut thread_rng());
 
             let mut buf = vec![0; vector_byte_size];
-            for mapping in remap.iter() {
+            for (current, mapping) in remap.iter().enumerate() {
+                if 100 * current % number_of_vecs == 0 {
+                    eprintln!("scrambing {}%", 100 * current / number_of_vecs);
+                }
                 let byte_offset = mapping * vector_size;
                 vec_file.read_at(&mut buf, byte_offset as u64).unwrap();
                 output_vecs.write_all(&buf).unwrap();
