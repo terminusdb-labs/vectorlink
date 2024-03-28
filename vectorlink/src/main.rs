@@ -9,13 +9,14 @@ use std::sync::Arc;
 mod batch;
 mod comparator;
 mod configuration;
+mod domain;
 mod indexer;
 mod openai;
 mod server;
 mod store;
+mod utils;
 mod vecmath;
 mod vectors;
-mod domain;
 
 mod search_server;
 
@@ -39,6 +40,7 @@ use vecmath::EMBEDDING_LENGTH;
 use rayon::iter::Either;
 use rayon::prelude::*;
 
+use crate::utils::{test_quantization, QuantizationStatistics};
 use crate::vecmath::Quantized16Embedding;
 
 use {indexer::create_index_name, vecmath::empty_embedding, vectors::VectorStore};
@@ -510,109 +512,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             ));
             let store = VectorStore::new(dirpath, size);
             let hnsw = HnswConfiguration::deserialize(hnsw_index_path, Arc::new(store)).unwrap();
-            if let HnswConfiguration::QuantizedOpenAi(_, hnsw) = hnsw {
-                let c = hnsw.quantized_comparator();
-                let quantized_vecs = c.data.vecs();
-                let mut cursor: &[Quantized32Embedding] = &quantized_vecs;
-                let quantizer = hnsw.quantizer();
-                // sample_avg = sum(errors)/|errors|
-                // sample_var = sum((error - sample_avg)^2)/|errors|
-
-                let fc = hnsw.full_comparator();
-
-                let errors = vec![0.0_f32; hnsw.vector_count()];
-
-                let mut offset = 0;
-                for chunk in fc.vector_chunks() {
-                    let len = chunk.len();
-                    let quantized_chunk = &cursor[..len];
-                    cursor = &cursor[len..];
-
-                    chunk
-                        .into_par_iter()
-                        .zip(quantized_chunk.into_par_iter())
-                        .map(|(full_vec, quantized_vec)| {
-                            let reconstructed = quantizer.reconstruct(quantized_vec);
-
-                            fc.compare_raw(&full_vec, &reconstructed)
-                        })
-                        .enumerate()
-                        .for_each(|(ix, distance)| unsafe {
-                            let ptr = errors.as_ptr().add(offset + ix) as *mut f32;
-                            *ptr = distance;
-                        });
-
-                    offset += len;
-                }
-
-                let sample_avg: f32 = errors.iter().sum::<f32>() / errors.len() as f32;
-                let sample_var = errors
-                    .iter()
-                    .map(|e| (e - sample_avg))
-                    .map(|x| x * x)
-                    .sum::<f32>()
-                    / (errors.len() - 1) as f32;
-                let sample_deviation = sample_var.sqrt();
-
-                eprintln!("sample avg: {sample_avg}\nsample var: {sample_var}\nsample deviation: {sample_deviation}");
-            } else if let HnswConfiguration::SmallQuantizedOpenAi(_, hnsw) = hnsw {
-                let c = hnsw.quantized_comparator();
-                let quantized_vecs = c.data.vecs();
-                let mut cursor: &[Quantized16Embedding] = &quantized_vecs;
-                let quantizer = hnsw.quantizer();
-                // sample_avg = sum(errors)/|errors|
-                // sample_var = sum((error - sample_avg)^2)/|errors|
-
-                let fc = hnsw.full_comparator();
-
-                let errors = vec![0.0_f32; hnsw.vector_count()];
-
-                let mut offset = 0;
-                for chunk in fc.vector_chunks() {
-                    if offset == 0 {
-                        // first iteration let's print some extra things
-                        let first_vec = &chunk[0];
-                        let first_quantized_vec = &cursor[0];
-                        let first_reconstructed_vec = quantizer.reconstruct(first_quantized_vec);
-                        for (f1, f2) in first_vec.iter().zip(first_reconstructed_vec.iter()) {
-                            let distance = (f1 - f2).abs();
-                            eprintln!(" {f1} {f2} ({distance})");
-                        }
-                    }
-                    let len = chunk.len();
-                    let quantized_chunk = &cursor[..len];
-                    cursor = &cursor[len..];
-
-                    chunk
-                        .into_par_iter()
-                        .zip(quantized_chunk.into_par_iter())
-                        .map(|(full_vec, quantized_vec)| {
-                            let reconstructed = quantizer.reconstruct(quantized_vec);
-
-                            fc.compare_raw(&full_vec, &reconstructed)
-                        })
-                        .enumerate()
-                        .for_each(|(ix, distance)| unsafe {
-                            let ptr = errors.as_ptr().add(offset + ix) as *mut f32;
-                            *ptr = distance;
-                        });
-
-                    offset += len;
-                }
-
-                let sample_avg: f32 = errors.iter().sum::<f32>() / errors.len() as f32;
-                let sample_var = errors
-                    .iter()
-                    .map(|e| (e - sample_avg))
-                    .map(|x| x * x)
-                    .sum::<f32>()
-                    / errors.len() as f32;
-                let sample_deviation = sample_var.sqrt();
-
-                eprintln!("sample avg: {sample_avg}\nsample var: {sample_var}\nsample deviation: {sample_deviation}");
-            } else {
-                panic!("not a pq hnsw index");
-            }
+            let QuantizationStatistics {
+                sample_avg,
+                sample_var,
+                sample_deviation,
+            } = match hnsw {
+                HnswConfiguration::QuantizedOpenAi(_, q) => test_quantization(&q),
+                HnswConfiguration::SmallQuantizedOpenAi(_, q) => test_quantization(&q),
+                HnswConfiguration::SmallQuantizedOpenAi8(_, q) => test_quantization(&q),
+                HnswConfiguration::SmallQuantizedOpenAi4(_, q) => test_quantization(&q),
+                HnswConfiguration::UnquantizedOpenAi(_, _) => panic!("not a quantized hnsw"),
+            };
+            eprintln!("sample avg: {sample_avg}\nsample var: {sample_var}\nsample deviation: {sample_deviation}");
         }
         Commands::SearchServer {
             port,

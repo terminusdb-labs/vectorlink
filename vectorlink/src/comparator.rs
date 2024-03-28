@@ -314,6 +314,11 @@ impl<const N: usize, C: DistanceCalculator<T = [f32; N]> + Default> Serializable
     }
 }
 
+pub trait QuantizedData {
+    type Quantized: Copy;
+    fn data(&self) -> &Arc<LoadedVectorRange<Self::Quantized>>;
+}
+
 #[derive(Clone)]
 pub struct Quantized32Comparator {
     pub cc: Centroid32Comparator,
@@ -331,6 +336,14 @@ impl QuantizedComparatorConstructor for Quantized32Comparator {
     }
 }
 
+impl QuantizedData for Quantized32Comparator {
+    type Quantized = Quantized32Embedding;
+
+    fn data(&self) -> &Arc<LoadedVectorRange<Self::Quantized>> {
+        &self.data
+    }
+}
+
 #[derive(Clone)]
 pub struct Quantized16Comparator {
     pub cc: Centroid16Comparator,
@@ -345,6 +358,14 @@ impl QuantizedComparatorConstructor for Quantized16Comparator {
             cc: cc.clone(),
             data: Default::default(),
         }
+    }
+}
+
+impl QuantizedData for Quantized16Comparator {
+    type Quantized = Quantized16Embedding;
+
+    fn data(&self) -> &Arc<LoadedVectorRange<Self::Quantized>> {
+        &self.data
     }
 }
 
@@ -379,6 +400,22 @@ impl QuantizedComparatorConstructor for Quantized4Comparator {
             cc: cc.clone(),
             data: Default::default(),
         }
+    }
+}
+
+impl QuantizedData for Quantized4Comparator {
+    type Quantized = Quantized4Embedding;
+
+    fn data(&self) -> &Arc<LoadedVectorRange<Self::Quantized>> {
+        &self.data
+    }
+}
+
+impl QuantizedData for Quantized8Comparator {
+    type Quantized = Quantized8Embedding;
+
+    fn data(&self) -> &Arc<LoadedVectorRange<Self::Quantized>> {
+        &self.data
     }
 }
 
