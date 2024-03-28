@@ -578,6 +578,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let mut remap: Vec<usize> = (0..number_of_vecs).collect();
             remap.shuffle(&mut thread_rng());
 
+            let remap_buf = unsafe {
+                std::slice::from_raw_parts(
+                    remap.as_ptr() as *const u8,
+                    number_of_vecs * std::mem::size_of::<usize>(),
+                )
+            };
+
+            std::fs::write(output_map, &remap_buf).unwrap();
+
             let mut buf = vec![0; vector_byte_size];
             for (current, mapping) in remap.iter().enumerate() {
                 if 100 * current % number_of_vecs == 0 {
@@ -587,15 +596,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 vec_file.read_at(&mut buf, byte_offset as u64).unwrap();
                 output_vecs.write_all(&buf).unwrap();
             }
-
-            let remap_buf = unsafe {
-                std::slice::from_raw_parts(
-                    remap.as_ptr() as *const u8,
-                    number_of_vecs * std::mem::size_of::<usize>(),
-                )
-            };
-
-            std::fs::write(output_map, &remap_buf).unwrap();
         }
     }
 
