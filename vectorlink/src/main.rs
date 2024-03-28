@@ -3,6 +3,8 @@
 
 use std::io::Read;
 use std::io::Write;
+use std::os::unix::fs::FileExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,8 +33,10 @@ use parallel_hnsw::pq::VectorSelector;
 use parallel_hnsw::AbstractVector;
 use parallel_hnsw::Comparator;
 use parallel_hnsw::Serializable;
+use rand::prelude::*;
 use std::fs::File;
 use std::io;
+use store::VectorFile;
 use vecmath::Quantized32Embedding;
 use vecmath::EMBEDDING_BYTE_LENGTH;
 use vecmath::EMBEDDING_LENGTH;
@@ -213,6 +217,16 @@ enum Commands {
         size: usize,
         #[arg(short, long)]
         key: Option<String>,
+    },
+    Scramble {
+        #[arg(short, long)]
+        vec_file: String,
+        #[arg(short, long)]
+        output_vecs: String,
+        #[arg(short, long)]
+        output_map: String,
+        #[arg(short, long)]
+        vector_size: usize,
     },
 }
 
@@ -546,6 +560,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             )
             .await
             .unwrap()
+        }
+        Commands::Scramble {
+            vec_file,
+            output_vecs,
+            output_map,
+            vector_size,
+        } => {
+            let vec_file = File::open(vec_file).unwrap();
+            let mut output_vecs = File::create(output_vecs).unwrap();
+
+            let byte_size = vec_file.metadata().unwrap().size() as usize;
+            assert!(byte_size % vector_size == 0);
+            let vector_byte_size = vector_size * std::mem::size_of::<f32>();
+            let number_of_vecs = byte_size / vector_byte_size;
+
+            let mut remap: Vec<usize> = (0..number_of_vecs).collect();
+            remap.shuffle(&mut thread_rng());
+
+            let mut buf = vec![0; vector_byte_size];
+            for mapping in remap.iter() {
+                let byte_offset = mapping * vector_size;
+                vec_file.read_at(&mut buf, byte_offset as u64).unwrap();
+                output_vecs.write_all(&buf).unwrap();
+            }
+
+            let remap_buf = unsafe {
+                std::slice::from_raw_parts(
+                    remap.as_ptr() as *const u8,
+                    number_of_vecs * std::mem::size_of::<usize>(),
+                )
+            };
+
+            std::fs::write(output_map, &remap_buf).unwrap();
         }
     }
 
